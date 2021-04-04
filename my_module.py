@@ -2218,6 +2218,104 @@ def draw_roc(y_test, probabilities, mode_05 = '', title = ''):
                                                    'hoverClosestCartesian', 'autoScale2d', 'toggleSpikelines'],
                         'toImageButtonOptions': {'height': None, 'width': None}})
 #%%
+def features_importance(model, model_type, title, X_train, y_train, X_test, y_test, 
+                        ax = False, return_perm = False, scoring = 'r2'):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.patheffects as path_effects
+    from sklearn.inspection import permutation_importance
+    import matplotlib.pyplot as plt
+    from IPython.display import display
+    
+    color_metrica = '#edffec'
+    color_train = '#1f441e'
+    color_test = '#bd2000'
+    bot_label = f'permutation importance ({scoring})'
+
+    if model_type == 'linear':
+        top_label = 'коэффициенты по модулю'
+        metrica = model.coef_[0]
+    elif model_type == 'forest':
+        top_label = 'MDI'
+        metrica = model.feature_importances_
+
+    result_train_sample = permutation_importance(model, X_train, y_train, scoring = scoring)
+    result_test_sample = permutation_importance(model, X_test, y_test, scoring = scoring)
+    impact = pd.DataFrame(dict(zip(X_test.columns, metrica)), 
+                          index = ['metrica']).T.sort_values(by = 'metrica', ascending = False)
+    impact = impact.reset_index().rename({'index': 'col'}, axis = 1)
+    if model_type == 'linear':
+        impact = impact.loc[(impact.metrica.abs().sort_values(ascending = False).index), :].reset_index(drop = True)
+    impact['perm_train'] = impact['col'].map(dict(zip(X.columns, result_train_sample.importances_mean)))
+    impact['std_train'] = impact['col'].map(dict(zip(X.columns, result_train_sample.importances_std)))
+    impact['perm_test'] = impact['col'].map(dict(zip(X.columns, result_test_sample.importances_mean)))
+    impact['std_test'] = impact['col'].map(dict(zip(X.columns, result_test_sample.importances_std)))
+    impact['train_xerr_min'] = impact['perm_train'].sub(impact['std_train'])
+    impact['train_xerr_max'] = impact['perm_train'].add(impact['std_train'])
+    impact['test_xerr_min'] = impact['perm_test'].sub(impact['std_test'])
+    impact['test_xerr_max'] = impact['perm_test'].add(impact['std_test'])
+
+    if model_type == 'linear':
+        color_metrica = ['#edffec' if x >= 0 else '#f5c0c0' for x in impact.metrica.values]
+        impact['metrica'] = impact.metrica.abs()
+        
+    if ax == False:
+        fig, ax = plt.subplots(figsize = (9, 0.45 * impact.shape[0]))
+        no_initial_ax = True
+    else:
+        no_initial_ax = False
+
+    xticks = np.linspace(0, round(impact.metrica.max(), 2), 6).round(3)
+    ax.set(ylim = (impact.index.max() + 1, -1), yticks = impact.index, xticks = xticks, xlabel = top_label)
+    ax.set_yticklabels(impact.col, fontsize = 12.5)
+    ax.set_xticklabels(xticks, color = '#edffec', weight = 'bold', fontsize = 11.5, family = 'sans-serif',
+                       path_effects = [path_effects.Stroke(linewidth = 2.2, foreground = 'k'), path_effects.Normal()])
+    ax.set_title(title, y = 1.09, fontsize = 16)
+
+    ax_perm = ax.twiny()
+    ax.tick_params(bottom = False, labelbottom = False, top = True, labeltop = True)
+    ax.xaxis.set_label_position('top')
+    ax.xaxis.labelpad = 10
+    ax_perm.grid(b = True, axis = 'x', linewidth = 3, color = 'grey', alpha = 0.4)
+    ax_perm.tick_params(bottom = True, labelbottom = True, top = False, labeltop = False)
+    ax_perm.xaxis.set_label_position('bottom')
+    ax_perm.set(xlim = (-0.18, 0.6), xticks = np.arange(0, 0.61, 0.1))
+    ax_perm.set_xlabel(bot_label, x = 0.63, color = color_test)
+    ax_perm.set_xticklabels(ax_perm.get_xticks().round(1), color = color_test, weight = 'bold', fontsize = 12.5, 
+                            family = 'sans-serif')
+    
+    if model_type == 'linear':
+        ax_perm.barh([], [], label = 'Положительный коэффициент')
+        ax_perm.barh([], [], label = 'Отрицательный коэффициент')
+    elif model_type == 'forest':
+        ax_perm.barh([], [], label = 'MDI признака')
+    ax.barh(impact.index, impact.metrica, color = color_metrica, ec = 'k', height = 1, linewidth = 1.5)
+    ax_perm.fill_between(x = [0, 0.6], y1 = ax.get_ylim()[0], y2 = ax.get_ylim()[1], color = 'grey', alpha = 0.2)
+    ax_perm.scatter(impact.perm_train, np.array(impact.index) - 0.2, c = color_train, s = 60, 
+                    label = 'perm.imp. на обучающей выборке')
+    ax_perm.hlines(y = np.array(impact.index) - 0.2, xmin = impact.train_xerr_min, 
+                   xmax = impact.train_xerr_max, color = color_train, linewidth = 2)
+    ax_perm.scatter(impact.perm_test, np.array(impact.index) + 0.2, c = color_test, s = 60,
+                   label = 'perm.imp. на валидационной выборке')
+    ax_perm.hlines(y = np.array(impact.index) + 0.2, xmin = impact.test_xerr_min, 
+                   xmax = impact.test_xerr_max, color = color_test, linewidth = 2, 
+                   label = 'std perm.imp. на пяти повторениях')
+    ax_perm.hlines(y = np.array(impact.index), xmin = 0, xmax = impact[['perm_train', 'perm_test']].max(axis = 1), 
+                   color = 'grey', linewidth = 1)
+
+    leg = ax_perm.legend(bbox_to_anchor = (1, 0.3), fontsize = 'large', facecolor = '#d8dcd6')
+    LH = leg.legendHandles
+    if model_type == 'linear':
+        LH[-2].set_color('#edffec')
+        LH[-1].set_color('#f5c0c0') 
+    elif model_type == 'forest':
+        LH[-1].set_color('#edffec')
+        
+    if no_initial_ax:
+        display(fig)
+        plt.close(fig)
+    if return_perm:
+        return result_train_sample, result_test_sample
 #%%
 #%%
 #%%
