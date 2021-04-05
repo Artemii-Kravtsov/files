@@ -2246,10 +2246,10 @@ def features_importance(model, model_type, title, X_train, y_train, X_test, y_te
     impact = impact.reset_index().rename({'index': 'col'}, axis = 1)
     if model_type == 'linear':
         impact = impact.loc[(impact.metrica.abs().sort_values(ascending = False).index), :].reset_index(drop = True)
-    impact['perm_train'] = impact['col'].map(dict(zip(X.columns, result_train_sample.importances_mean)))
-    impact['std_train'] = impact['col'].map(dict(zip(X.columns, result_train_sample.importances_std)))
-    impact['perm_test'] = impact['col'].map(dict(zip(X.columns, result_test_sample.importances_mean)))
-    impact['std_test'] = impact['col'].map(dict(zip(X.columns, result_test_sample.importances_std)))
+    impact['perm_train'] = impact['col'].map(dict(zip(X_test.columns, result_train_sample.importances_mean)))
+    impact['std_train'] = impact['col'].map(dict(zip(X_test.columns, result_train_sample.importances_std)))
+    impact['perm_test'] = impact['col'].map(dict(zip(X_test.columns, result_test_sample.importances_mean)))
+    impact['std_test'] = impact['col'].map(dict(zip(X_test.columns, result_test_sample.importances_std)))
     impact['train_xerr_min'] = impact['perm_train'].sub(impact['std_train'])
     impact['train_xerr_max'] = impact['perm_train'].add(impact['std_train'])
     impact['test_xerr_min'] = impact['perm_test'].sub(impact['std_test'])
@@ -2270,7 +2270,7 @@ def features_importance(model, model_type, title, X_train, y_train, X_test, y_te
     ax.set_yticklabels(impact.col, fontsize = 12.5)
     ax.set_xticklabels(xticks, color = '#edffec', weight = 'bold', fontsize = 11.5, family = 'sans-serif',
                        path_effects = [path_effects.Stroke(linewidth = 2.2, foreground = 'k'), path_effects.Normal()])
-    ax.set_title(title, y = 1.09, fontsize = 16)
+    ax.set_title(title, y = 1.12, fontsize = 16)
 
     ax_perm = ax.twiny()
     ax.tick_params(bottom = False, labelbottom = False, top = True, labeltop = True)
@@ -2302,8 +2302,9 @@ def features_importance(model, model_type, title, X_train, y_train, X_test, y_te
                    label = 'std perm.imp. на пяти повторениях')
     ax_perm.hlines(y = np.array(impact.index), xmin = 0, xmax = impact[['perm_train', 'perm_test']].max(axis = 1), 
                    color = 'grey', linewidth = 1)
-
-    leg = ax_perm.legend(bbox_to_anchor = (1, 0.3), fontsize = 'large', facecolor = '#d8dcd6')
+    
+    fontsize = 'medium' if (impact.shape[1] < 16) else 'large'
+    leg = ax_perm.legend(fontsize = fontsize, facecolor = '#d8dcd6', loc = 'lower right')
     LH = leg.legendHandles
     if model_type == 'linear':
         LH[-2].set_color('#edffec')
@@ -2315,8 +2316,28 @@ def features_importance(model, model_type, title, X_train, y_train, X_test, y_te
         display(fig)
         plt.close(fig)
     if return_perm:
-        return result_train_sample, result_test_sample
+        return impact
 #%%
+def corr_clusters(X, threshold, draw_dendrogram = True, title = ''):
+    from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
+    import pandas as pd
+    
+    corr = X.corr()
+    corr_linkage = linkage(corr, method = 'ward')
+    clusters = pd.DataFrame(dict(zip(X.columns, fcluster(corr_linkage, threshold, criterion = 'distance'))), 
+                                     index = ['cluster']).T.sort_values(by = 'cluster')
+    if draw_dendrogram:
+        fig, ax = plt.subplots(figsize = (7, 0.225 * corr.shape[0]))
+        dg = dendrogram(corr_linkage, labels = X.columns, leaf_rotation = 90, ax = ax, 
+                        color_threshold = threshold, above_threshold_color = 'black')
+        ax.set_title(title, fontsize = 16, y = 1.05)
+        ax.set(ylabel = 'расстояние по Варду')
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        display(fig)
+        plt.close(fig)
+        
+    return clusters
 #%%
 #%%
 #%%
