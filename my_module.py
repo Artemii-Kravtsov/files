@@ -2218,14 +2218,16 @@ def draw_roc(y_test, probabilities, mode_05 = '', title = ''):
                                                    'hoverClosestCartesian', 'autoScale2d', 'toggleSpikelines'],
                         'toImageButtonOptions': {'height': None, 'width': None}})
 #%%
-def features_importance(model, model_type, title, X_train, y_train, X_test, y_test, 
-                        ax = False, return_perm = False, scoring = 'r2'):
+def features_importance(model, model_type, title, X, y, 
+                        ax = False, return_perm = False, scoring = 'r2', random_state = 0):
     import pandas as pd
     import numpy as np
     import matplotlib.patheffects as path_effects
     from sklearn.inspection import permutation_importance
     import matplotlib.pyplot as plt
     from IPython.display import display
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = random_state)
     
     color_metrica = '#edffec'
     color_train = '#1f441e'
@@ -2339,6 +2341,24 @@ def corr_clusters(X, threshold, draw_dendrogram = True, title = ''):
         
     return clusters
 #%%
+def remove_correlated_features(model, model_type, X, thr_max):
+    actual_features = set(X.columns)
+    for thr in np.arange(0, thr_max, 0.1):
+        clusters = corr_clusters(X, thr, draw_dendrogram = False)
+        if model_type == 'linear':
+            clusters['coeffs'] = clusters.index.map(dict(zip(X.columns, np.abs(model.coef_[0]))))
+        elif model_type == 'forest':
+            clusters['coeffs'] = clusters.index.map(dict(zip(X.columns, model.feature_importances_)))
+        new_cols = set(clusters[ clusters.coeffs.isin(clusters.groupby('cluster')['coeffs'].max()) ].index)
+        removed_cols = actual_features.difference(new_cols)
+        if len(removed_cols) == 0 and thr != 0:
+            continue
+        actual_features = new_cols
+        X_exp = X.loc[:, actual_features]
+        metrics = learn(X_exp, y, models = {0: LogisticRegression(random_state = 0)}, return_metrics = True)
+        print('{: <45}'.format(', '.join(list(removed_cols)) + [':' if thr != 0 else '<изначальный вариант>'][0]), 
+              end = '')
+        print(metrics['Матрица ошибок'], '. ROC_AUC: ', round(metrics['ROC_AUC'], 4), sep = '')
 #%%
 #%%
 #%%
