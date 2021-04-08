@@ -2362,8 +2362,8 @@ def remove_correlated_features(model, model_type, X, thr_max):
             display(fig)
             plt.close(fig)
         return clusters
-
-    def remove_correlated_features(model, model_type, X, thr_max):
+#%%
+def remove_correlated_features(model, model_type, X, thr_max):
     actual_features = set(X.columns)
     coeffs = np.abs(model.coef_[0])
     for thr in np.arange(0, thr_max, 0.1):
