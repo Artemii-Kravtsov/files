@@ -2186,7 +2186,7 @@ def draw_roc(y_test, probabilities, mode_05 = '', title = ''):
                   xref = 'paper'), xaxis_title = dict(text ='fpr (1 - специфичность)', font = dict(size = 14.5)), 
                   margin = dict(l = 0, r = 10, t = 70, b = 0), yaxis_title = dict(text ='tpr (полнота)',
                   font = dict(size = 14.5)))
-        annotations = [dict(text = f'ROC AUC: {round(roc_auc, 3)}', font_color = 'black', opacity = 0.5,
+        annotations = [dict(text = f'ROC AUC: {round(roc_auc, 4)}', font_color = 'black', opacity = 0.5,
                   x = 0.8, y = 0.1, showarrow = False, xref = 'x', yref = 'y', font_size = 12)]
         if mode_05 == 'explain':
             annot = ('<b>Дефолтный порог 0.5</b><br>(когда предсказанная вероятность единицы '
@@ -2342,11 +2342,34 @@ def corr_clusters(X, threshold, draw_dendrogram = True, title = ''):
     return clusters
 #%%
 def remove_correlated_features(model, model_type, X, thr_max):
+    from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
+    import pandas as pd
+    import numpy as np
+    
+    def corr_clusters(X, threshold, draw_dendrogram = True, title = ''):    
+        corr = X.corr()
+        corr_linkage = linkage(corr, method = 'ward')
+        clusters = pd.DataFrame(dict(zip(X.columns, fcluster(corr_linkage, threshold, criterion = 'distance'))), 
+                                         index = ['cluster']).T.sort_values(by = 'cluster')
+        if draw_dendrogram:
+            fig, ax = plt.subplots(figsize = (7, 0.225 * corr.shape[0]))
+            dg = dendrogram(corr_linkage, labels = X.columns, leaf_rotation = 90, ax = ax, 
+                            color_threshold = threshold, above_threshold_color = 'black')
+            ax.set_title(title, fontsize = 16, y = 1.05)
+            ax.set(ylabel = 'расстояние по Варду')
+            ax.spines['right'].set_visible(False)
+            ax.spines['top'].set_visible(False)
+            display(fig)
+            plt.close(fig)
+        return clusters
+
+    def remove_correlated_features(model, model_type, X, thr_max):
     actual_features = set(X.columns)
+    coeffs = np.abs(model.coef_[0])
     for thr in np.arange(0, thr_max, 0.1):
         clusters = corr_clusters(X, thr, draw_dendrogram = False)
         if model_type == 'linear':
-            clusters['coeffs'] = clusters.index.map(dict(zip(X.columns, np.abs(model.coef_[0]))))
+            clusters['coeffs'] = clusters.index.map(dict(zip(X.columns, coeffs)))
         elif model_type == 'forest':
             clusters['coeffs'] = clusters.index.map(dict(zip(X.columns, model.feature_importances_)))
         new_cols = set(clusters[ clusters.coeffs.isin(clusters.groupby('cluster')['coeffs'].max()) ].index)
@@ -2355,11 +2378,157 @@ def remove_correlated_features(model, model_type, X, thr_max):
             continue
         actual_features = new_cols
         X_exp = X.loc[:, actual_features]
-        metrics = learn(X_exp, y, models = {0: LogisticRegression(random_state = 0)}, return_metrics = True)
+        metrics = learn(X_exp, y, models = {0: model}, return_metrics = True)
         print('{: <45}'.format(', '.join(list(removed_cols)) + [':' if thr != 0 else '<изначальный вариант>'][0]), 
               end = '')
         print(metrics['Матрица ошибок'], '. ROC_AUC: ', round(metrics['ROC_AUC'], 4), sep = '')
 #%%
+def classification_errors(X, y, probabilities, threshold_to_1 = 0.5, title = '', 
+                          return_fig = False, drop_features = [], annotate_means = None):
+    X = X.copy()
+    X['prob'] = probabilities
+    X['target'] = y
+    
+    err_df = X[ ((X.prob >= threshold_to_1) & (X.target != 1)) | 
+                ((X.prob < threshold_to_1) & (X.target != 0)) ].copy()
+    err_df['err_type'] = err_df.target.apply(lambda x: 'FP' if x == 0 else 'FN')
+
+    all_who_stayed = X[ X.target == 0 ].describe().loc['mean', :]
+    all_who_stayed_std = X[ X.target == 0 ].describe().loc['std', :]
+    all_who_dropped = X[ X.target == 1 ].describe().loc['mean', :]
+    all_who_dropped_std = X[ X.target == 1 ].describe().loc['std', :]
+    fp = err_df[ err_df.err_type == 'FP' ].describe().loc['mean', :]
+    fp_std = err_df[ err_df.err_type == 'FP' ].describe().loc['std', :]
+    fp_cnt = err_df[ err_df.err_type == 'FP' ].describe().loc['count', :]
+    fn = err_df[ err_df.err_type == 'FN' ].describe().loc['mean', :]
+    fn_std = err_df[ err_df.err_type == 'FN' ].describe().loc['std', :]
+    fn_cnt = err_df[ err_df.err_type == 'FN' ].describe().loc['count', :]
+
+    errors = pd.concat([all_who_stayed, all_who_stayed_std, all_who_dropped, all_who_dropped_std, 
+                        fp, fp_std, fn, fn_std, fp_cnt, fn_cnt], axis = 1)
+    errors.columns = ['stayed', 'stayed_std', 'dropped', 'dropped_std', 'FP', 'FP_std', 'FN', 'FN_std', 
+                      'FP_cnt', 'FN_cnt']
+    for col in ['FP', 'FN']:
+        errors[f'{col}_x1'] = errors[col].sub(errors[f'{col}_std'])
+        errors[f'{col}_x2'] = errors[col].add(errors[f'{col}_std'])
+        errors[f'{col}_x1'] = errors[col].sub(errors[f'{col}_std'])
+        errors[f'{col}_x2'] = errors[col].add(errors[f'{col}_std'])
+
+    drop_features.extend(['target', 'prob'])
+    errors.drop(drop_features, axis = 0, inplace = True)
+    errors['end_point'] = errors[['stayed', 'dropped']].max(axis = 1)
+    errors['end_point_label'] = errors.apply(lambda row: 0 if (row['end_point'] == row['stayed']) else 1, axis = 1)
+    errors['start_point'] = errors[['stayed', 'dropped']].min(axis = 1)
+    errors['start_point_label'] = errors.apply(lambda row: 0 if (row['start_point'] == row['stayed']) else 1, 
+                                               axis = 1)
+    s_std = (lambda row: (row['start_point'] - row['stayed_std']) if (row['start_point_label'] == 0) 
+                          else (row['start_point'] - row['dropped_std']))
+    e_std = (lambda row: (row['end_point'] + row['stayed_std']) if (row['end_point_label'] == 0) 
+                          else (row['end_point'] + row['dropped_std']))
+    errors['start_std'] = errors.apply(s_std, axis = 1)
+    errors['end_std'] = errors.apply(e_std, axis = 1)
+#     FP_95_conf = errors.apply(lambda row: t.interval(0.95, row['FP_cnt'], loc = row['FP'], scale = row['FP_std']), 
+#                               axis = 1)
+#     FN_95_conf = errors.apply(lambda row: t.interval(0.95, row['FN_cnt'], loc = row['FN'], scale = row['FN_std']), 
+#                               axis = 1)
+#     errors['FP_95_conf_min'] = FP_95_conf.apply(lambda x: x[0])
+#     errors['FP_95_conf_max'] = FP_95_conf.apply(lambda x: x[1])
+#     errors['FN_95_conf_min'] = FN_95_conf.apply(lambda x: x[0])
+#     errors['FN_95_conf_max'] = FN_95_conf.apply(lambda x: x[1])
+
+    def min_max_scaling(row):
+        denominator = row.end_point - row.start_point
+        values = (row.loc[['start_std', 'FP', 'FP_x1', 'FP_x2', 'FN', 'FN_x1', 'FN_x2', 'end_std']] 
+#                            'FP_95_conf_min', 'FP_95_conf_max', 'FN_95_conf_min', 'FN_95_conf_max'
+                  .apply(lambda x: (x - row.start_point) / denominator).values)
+        return values
+    
+    errors['coordinates'] = errors.apply(min_max_scaling, axis = 1)
+    errors['min_coord'] = errors['coordinates'].apply(lambda cell: cell.min())
+    errors['max_coord'] = errors['coordinates'].apply(lambda cell: cell.max())
+    errors['start_std_coord'] = errors['coordinates'].apply(lambda cell: cell[0])
+    errors['FP_coord'] = errors['coordinates'].apply(lambda cell: cell[1])
+    errors['FP_x1_coord'] = errors['coordinates'].apply(lambda cell: cell[2])
+    errors['FP_x2_coord'] = errors['coordinates'].apply(lambda cell: cell[3])
+    errors['FN_coord'] = errors['coordinates'].apply(lambda cell: cell[4])
+    errors['FN_x1_coord'] = errors['coordinates'].apply(lambda cell: cell[5])
+    errors['FN_x2_coord'] = errors['coordinates'].apply(lambda cell: cell[6])
+    errors['end_std_coord'] = errors['coordinates'].apply(lambda cell: cell[7])
+#     errors['FP_95_conf_min_coord'] = errors['coordinates'].apply(lambda x: x[8])
+#     errors['FP_95_conf_max_coord'] = errors['coordinates'].apply(lambda x: x[9])
+#     errors['FN_95_conf_min_coord'] = errors['coordinates'].apply(lambda x: x[10])
+#     errors['FN_95_conf_max_coord'] = errors['coordinates'].apply(lambda x: x[11])    
+    
+    colormap = {0: '#1597bb', 1: '#7b113a'}
+    xlim = (errors.min_coord.min(), errors.max_coord.max())
+    xlim_shift = (xlim[1] - xlim[0]) * 0.03
+    yticks = np.arange(errors.shape[0])
+    xticks = np.linspace(xlim[0], xlim[1], 10).round(2)
+    xticks = xticks[ (xticks > 1.5) | (xticks < -1.5) ]
+    xticks = sorted([0, 1] + list(xticks))
+    xticklabels = ['0\nменьшее\nсреднее' if x == 0 else x for x in xticks]
+    xticklabels = ['1\nбольшее\nсреднее' if x == 1 else x for x in xticklabels]
+    
+    fig, ax = plt.subplots(figsize = (18, 0.9 * errors.shape[0]))
+    ax.set_title(title, y = 1.03, fontsize = 22)
+    ax.set(xlim = (xlim[0] - xlim_shift, xlim[1] + xlim_shift), yticks = yticks, ylim = (-1, errors.shape[0] + 1.5),
+           xticks = xticks)
+    ax.set_xlabel('нормализованные значения переменных', fontsize = 13)
+    ax.set_yticklabels(errors.index, rotation = 0, fontsize = 14)
+    ax.set_xticklabels(xticklabels, fontsize = 14)
+    ax.grid(b = True, axis = 'y')
+    ax.spines['left'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    ax.vlines(x = [0, 1], ymin = -0.5, ymax = errors.shape[0] - 0.5, color = 'black')
+    ax.scatter(x = errors['start_std_coord'], y = yticks, marker = '|', s = 5 * errors.shape[0], 
+               color = errors['start_point_label'].map(colormap), linewidth = 5)
+    ax.scatter(x = errors['end_std_coord'], y = yticks, marker = '|', s = 5 * errors.shape[0], 
+               color = errors['end_point_label'].map(colormap), linewidth = 5)
+    ax.hlines(y = yticks, xmin = errors['start_std_coord'], xmax = 0, linestyles = 'solid', 
+              color = errors['start_point_label'].map(colormap), linewidth = 5)
+    ax.hlines(y = yticks, xmin = 1, xmax = errors['end_std_coord'], linestyles = 'solid', 
+              color = errors['end_point_label'].map(colormap), linewidth = 5)
+    ax.scatter(x = errors['FN_coord'], y = yticks + 0.2, marker = 'o', s = 5.5 * errors.shape[0], color = colormap[0],
+               zorder = 1)
+    ax.hlines(y = yticks + 0.2, xmin = errors['FN_x1_coord'], xmax = errors['FN_x2_coord'], linestyles = 'solid', 
+              color = colormap[0], alpha = 0.8)
+    ax.scatter(x = errors['FP_coord'], y = yticks - 0.2, marker = 'o', s = 5.5 * errors.shape[0], color = colormap[1],
+               zorder = 1)
+    ax.hlines(y = yticks - 0.2, xmin = errors['FP_x1_coord'], xmax = errors['FP_x2_coord'], linestyles = 'solid', 
+              color = colormap[1], alpha = 0.8)
+
+    ax.hlines([], [], [], linestyles = 'solid', color = colormap[0], linewidth = 5, 
+              label = "std истинных '0' (соединяется с истинным средним)")
+    ax.plot([], [], marker = 'o', ms = 0.4 * errors.shape[0], color = colormap[0], ls = '-.', 
+            label = 'среднее и std ложноотрицательных (FN) предсказаний')
+    ax.hlines([], [], [], linestyles = 'solid', color = colormap[1], linewidth = 5, 
+              label = "std истинных '1' (соединяется с истинным средним)")
+    ax.plot([], [], marker = 'o', ms = 0.4 * errors.shape[0], color = colormap[1], ls = '-.', 
+            label = 'среднее и std ложноположительных (FP) предсказаний')
+    ax.legend()
+    handles, labels = ax.get_legend_handles_labels()
+    order = [2, 0, 3, 1]
+    ax.legend([handles[i] for i in order],[labels[i] for i in order], 
+              fontsize = 'x-large', ncol = 2, loc = 'upper center', frameon = False)
+    
+    if annotate_means or annotate_means == 0:
+        if annotate_means == 0:
+            errors['start_point'] = errors['start_point'].round(0).astype('int')
+            errors['end_point'] = errors['end_point'].round(0).astype('int')
+        elif annotate_means > 0:
+            errors['start_point'] = errors['start_point'].round(annotate_means)
+            errors['end_point'] = errors['end_point'].round(annotate_means)
+        for i in yticks: 
+            ax.text(s = errors.iloc[i]['start_point'], x = 0 - xlim_shift * 0.3, y = i + 0.07, va = 'bottom', 
+                    ha = 'right', fontsize = 13)
+            ax.text(s = errors.iloc[i]['end_point'], x = 1 + xlim_shift * 0.3, y = i + 0.07, va = 'bottom', 
+                    ha = 'left', fontsize = 13)
+
+    if return_fig:
+        return fig
+    else:
+        display(fig)
 #%%
 #%%
 #%%
