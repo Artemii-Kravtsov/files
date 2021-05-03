@@ -589,9 +589,13 @@ def customizing_intervals(interval, dtype = '', decimals = 0, parenthesis = Fals
         left_decimals = left_decimals[:decimals]
         right_decimals = right_decimals[:decimals]
         if parenthesis == False:
-            return ''.join([left_integer, '.', left_decimals, ' - ', right_integer, '.', right_decimals])
+            s = ''.join([left_integer, '.', left_decimals, ' - ', right_integer, '.', right_decimals])
         else:
-            return ''.join(['(', left_integer, '.', left_decimals, ' - ', right_integer, '.', right_decimals, ']'])
+            s = ''.join(['(', left_integer, '.', left_decimals, ' - ', right_integer, '.', right_decimals, ']'])
+        if decimals == 0:
+            s = s.replace('.', '')
+        s = s.replace('-0', '0')
+        return s
     else:
         interval = str(interval)
         left, right = interval.split(', ')
@@ -2103,7 +2107,7 @@ detail_tag_in_portfolio([a, b, c, d, e, f, g, h, i, j, k, l, m, n, o])
 def my_info(df):
     import pandas
     import numpy
-    info = pd.DataFrame(index = df.columns, columns = ['type', 'not_null_cnt', 'nunique', 'mean', 'min', 
+    info = pd.DataFrame(index = df.columns, columns = ['type', 'not_null_cnt', 'nunique', '', 'mean', 'min', 
                                                        '25%', '50%', '75%', 'max'])
     numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
     for col in df.columns:
@@ -2111,10 +2115,15 @@ def my_info(df):
         info.loc[col, 'not_null_cnt'] = df[col].notna().sum()
         if col in numeric_cols:
             nuniq = df[col].nunique()
-            if nuniq / df[col].shape[0] > 0.1:
-                info.loc[col, 'nunique'] = '-'
+            if nuniq / df[col].shape[0] > 0.25:
+                info.loc[col, 'nunique'] = nuniq
+                info.loc[col, ''] = 'continuous'
+            elif nuniq == 2:
+                info.loc[col, 'nunique'] = 2
+                info.loc[col, ''] = 'binary'
             else:
                 info.loc[col, 'nunique'] = nuniq
+                info.loc[col, ''] = 'discrete'
             info.loc[col, 'mean'] = df[col].mean()
             info.loc[col, 'min'] = df[col].min()
             info.loc[col, 'max'] = df[col].max()
@@ -2122,8 +2131,17 @@ def my_info(df):
             info.loc[col, '50%'] = df[col].quantile(0.5)
             info.loc[col, '75%'] = df[col].quantile(0.75)
         else:
-            info.loc[col, 'nunique'] = df[col].nunique()
-            info.iloc[:, 3:] = '-'
+            nuniq = df[col].nunique()
+            if nuniq / df[col].shape[0] > 0.25:
+                info.loc[col, 'nunique'] = nuniq
+                info.loc[col, ''] = 'varchar'
+            elif nuniq == 2:
+                info.loc[col, 'nunique'] = 2
+                info.loc[col, ''] = 'binary'
+            else:
+                info.loc[col, 'nunique'] = nuniq
+                info.loc[col, ''] = 'category'
+            info.loc[col, :][4:] = '-'
     return info
 #%%
 def corr_matrix(df, half_table = False):
@@ -2362,8 +2380,7 @@ def remove_correlated_features(model, model_type, X, thr_max):
             display(fig)
             plt.close(fig)
         return clusters
-#%%
-def remove_correlated_features(model, model_type, X, thr_max):
+
     actual_features = set(X.columns)
     coeffs = np.abs(model.coef_[0])
     for thr in np.arange(0, thr_max, 0.1):
@@ -2530,10 +2547,678 @@ def classification_errors(X, y, probabilities, threshold_to_1 = 0.5, title = '',
     else:
         display(fig)
 #%%
+def col_types(df):
+    from collections import defaultdict
+    import numpy as np
+    import pandas as pd
+    coltypes = defaultdict(list)
+    cols = df.select_dtypes(include = np.number).columns.tolist()
+    for col in set(df.columns).difference(cols):
+        nuniq = df[col].nunique()
+        if nuniq == 2:
+            coltypes['binary'].append(col)
+        elif nuniq / df[col].shape[0] < 0.1:
+            coltypes['discrete'].append(col)
+    for col in cols:
+        nuniq = df[col].nunique()
+        if nuniq == 2:
+            coltypes['binary'].append(col)
+        elif nuniq / df[col].shape[0] < 0.25:
+            coltypes['discrete'].append(col)
+        else:
+            coltypes['continuous'].append(col)
+    return dict(coltypes)
 #%%
+def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>Непрерывные переменные</b>', display_graph = True):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from plotly import graph_objs as go
+    import scipy.stats as st
+    from collections import defaultdict
+    
+    title = (f'<b>{title}</b>')
+    groups_num = len(groups)
+    hidden_groups = False
+    if groups_num != len(df[grouper].unique()):
+        df_full = df.copy()
+        df = df[ df[grouper].isin(groups) ]
+        hidden_groups = True
+    groups_cnt = df[grouper].value_counts()
+    continuous = continuous_vars
+    df_continuous = df[continuous + [grouper]]
+
+    # единая шкала для непрерывных столбцов - стандартизация, для которой берётся 
+    # среднее и отклонение ото всех групп, даже если некоторые из них исключены
+    if hidden_groups:
+        zs_continuous = df_full[continuous].apply(st.zscore, axis = 0)
+        zs_continuous[grouper] = df_continuous[grouper]
+        zs_continuous = zs_continuous.dropna()
+    else:    
+        zs_continuous = df_continuous.drop([grouper], axis = 1).apply(st.zscore, axis = 0)
+        zs_continuous[grouper] = df_continuous[grouper]
+
+    # выборочные средние непрерывных переменных для отображения в hover
+    s_means = {}
+    for col in continuous:
+        if hidden_groups:
+            s_means[col] = df_full[col].mean() 
+        else: s_means[col] = df[col].mean()
+
+    # границы боксплотов, количество выбросов в процентах и hover. в той выборке, которая 
+    # передаётся plotly, выбросы заменяем на пограничные значения, чтобы plotly не рисовал выбросы
+    borders, borders_hover, tops, bots = {}, {}, [], []
+    for x in groups:
+        borders[x], borders_hover[x] = {}, {}
+        sliced = zs_continuous[ zs_continuous[grouper] == x ]
+        sliced_hover = df_continuous[ df_continuous[grouper] == x ]
+        for col in continuous:
+            sliced_2 = sliced[col]
+            sh_2 = sliced_hover[col]
+            iqr_15 = st.iqr(sliced_2) * 1.5
+            calc_min = sliced_2.quantile(.25) - iqr_15
+            calc_max = sliced_2.quantile(.75) + iqr_15
+            if calc_min < sliced_2.min():
+                calc_min = sliced_2.min()
+            if calc_max > sliced_2.max():
+                calc_max = sliced_2.max()       
+            sliced_data = sliced_2[ (sliced_2 >= calc_min) & (sliced_2 <= calc_max) ]
+            sliced_data_min = sliced_data.min()
+            sliced_data_max = sliced_data.max()
+            outl_top_leng = sliced_2[ sliced_2 > calc_max ].shape[0]
+            outl_bot_leng = sliced_2[ sliced_2 < calc_min ].shape[0]
+            bots.append(sliced_data_min)
+            tops.append(sliced_data_max)
+            sliced_data = sliced_data.append(pd.Series([sliced_data_min] * outl_bot_leng, dtype = 'float64'))
+            sliced_data = sliced_data.append(pd.Series([sliced_data_max] * outl_top_leng, dtype = 'float64'))
+            borders[x].update({f'{col}': {'data': sliced_data.values,
+                                          'median': sliced_data.median(),
+                                          'bot_coord': sliced_data_min, 
+                                          'top_coord': sliced_data_max, 
+                                          'outl_top': '{:.2%}'.format(outl_top_leng / sliced_2.shape[0]), 
+                                          'outl_bot': '{:.2%}'.format(outl_bot_leng / sliced_2.shape[0])}})
+            b_hover = (f'Группа: <b>{x}</b><br>Поле: <b>{col}</b><br>Среднее (группа): <b>{sh_2.mean():.3f}</b>'
+                    f'<br>Среднее (выборка): <b>{s_means[col]:.3f}</b><br><br>'
+                    f'bot_whisker: <b>{sh_2[sliced_data.idxmin()]:.3f}</b><br>q1: <b>{sh_2.quantile(.25):.3f}</b><br>'
+                    f'q2: <b>{sh_2.median():.3f}</b><br>q3: <b>{sh_2.quantile(.75):.3f}</b>'
+                    f'<br>top_whisker: <b>{sh_2[sliced_data.idxmax()]:.3f}</b>')
+            borders_hover[x].update({f'{col}': b_hover})
+
+    # графические параметры для непрерывных столбцов
+    xlim = (min(bots), max(tops))
+    xlim_shift = (xlim[1] - xlim[0]) * 0.1
+    xlim_plus = (xlim[0] - xlim_shift, xlim[1] + xlim_shift)
+    yticks = np.arange(len(continuous))
+    xticks = [-1, 0, 1]
+    xticklabels = ['-σ', 'μ', 'σ']
+    space_around_1 = 0.09 + (0.025 * groups_num)
+    width = (0.6 / groups_num) + (0.003 * groups_num)
+    y_interval = np.linspace(-1 * space_around_1, space_around_1, groups_num)
+    coef = 1 / (1 - width)
+    if len(continuous) != 1:
+        ax_height = 30 * (len(continuous) * (coef * groups_num))
+    elif len(continuous) == 1 and groups_num > 2:
+        ax_height = 50 * (len(continuous) * (coef * groups_num))
+    else:
+        ax_height = 60 * (len(continuous) * (coef * groups_num))
+
+    # цветовая палитра для групп
+    cmap = plt.get_cmap('tab10', groups_num)
+    colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+    colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
+
+    # график непрерывных
+    objects_cont = []
+    add_space_to_leg = ['<br>' if (len(continuous) > 2) & (groups_num > 2) else ''][0]
+    for i, gr in enumerate(groups):
+        x = [borders[gr][col]['data'] for col in continuous]
+        y = [[y_pos] * len(data) for data, y_pos in zip(x, yticks - y_interval[i])]
+        x = [j for i in x for j in i]
+        y = [j for i in y for j in i]
+        objects_cont.append(go.Box(x = x, y = y, marker_color = colors[i], hoverinfo = 'skip', boxmean = True,
+                                   name = f"{add_space_to_leg}Группа '{gr}'<br>({groups_cnt[gr]} записей)",
+                                   width = width, orientation = 'h'))
+
+    # параметры графика непрерывных переменных
+    kw_cont = dict(shapes = [{'type': 'line', 'x0': -1, 'x1': -1, 'xref': 'x', 'y0': -0.5, 'line_width': 2.5,
+                              'y1': len(continuous) - 0.5, 'yref': 'y', 'line_dash': 'dash', 'opacity': 0.15},
+                             {'type': 'line', 'x0': 1, 'x1': 1, 'xref': 'x', 'y0': -0.5, 'line_width': 2.5,
+                              'y1': len(continuous) - 0.5, 'yref': 'y', 'line_dash': 'dash', 'opacity': 0.15},
+                             {'type': 'line', 'x0': 0, 'x1': 0, 'xref': 'x', 'y0': -0.5, 
+                              'y1': len(continuous) - 0.5, 'yref': 'y', 'line_width': 4, 'opacity': 0.15}],
+                   height = ax_height, template = 'ggplot2', xaxis = dict(tickmode = 'array', tickvals = xticks, 
+                   ticktext = xticklabels, range = (xlim_plus[0], xlim_plus[1])), yaxis = dict(tickmode = 'array', 
+                   tickvals = yticks, ticktext = continuous, range = (-0.5, len(continuous)-0.5)), boxmode = 'group',
+                   legend = dict(font_size = 13), title = dict(font_size = 16, y = 1, pad = {'b': 20}, 
+                   text = title, x = 0.5, yanchor = 'bottom', xanchor = 'center', xref = 'paper', yref = 'paper'),
+                   margin = dict(l = 0, r = 0, t = 60, b = 0))
+
+    # фейковые точки по оси y для каждого боксплота с информацией для hover
+    for i, gr in enumerate(groups):
+        x = [borders[gr][col]['median'] for col in continuous]
+        text = [borders_hover[gr][col] for col in continuous]
+        y_pos = yticks - y_interval[i]
+        for j, col in enumerate(continuous):
+            objects_cont.append(go.Scatter(x = [x[j]], y = [y_pos[j]], text = [text[j]], showlegend = False,
+                                           hovertemplate = '%{text}<extra></extra>', marker = dict(color = colors[i], 
+                                           symbol = 41, size = 65, opacity = 0), 
+                                           hoverlabel = {'bgcolor': colors_05[i]}))
+
+    # подписи с количеством выбросов
+    annots_bot, annots_top, annots_color, annots_bot_pos, annots_top_pos, annots_ypos = [], [], [], [], [], []
+    for i, gr in enumerate(groups):
+        annots_bot.extend([borders[gr][col]['outl_bot'] for col in continuous])
+        annots_top.extend([borders[gr][col]['outl_top'] for col in continuous])
+        annots_bot_pos.extend([borders[gr][col]['bot_coord'] for col in continuous])
+        annots_top_pos.extend([borders[gr][col]['top_coord'] for col in continuous])
+        annots_ypos.extend(yticks - y_interval[i])
+        annots_color.extend([colors[i]] * len(continuous))
+    annots_bot_pos = [(x - xlim_shift * 0.5) for x in annots_bot_pos]
+    annots_top_pos = [(x + xlim_shift * 0.5) for x in annots_top_pos]
+    ann_kwargs = dict(showarrow = False, xref = 'x', yref = 'y', font_size = 12)
+    annots_bot = [ {'text': prc, 'x': xpos, 'y': ypos, 'font_color': col, 'align': 'right', **ann_kwargs} for prc, 
+                     xpos, ypos, col in zip(annots_bot, annots_bot_pos, annots_ypos, annots_color) if prc != '0.00%' ]
+    annots_top = [ {'text': prc, 'x': xpos, 'y': ypos, 'font_color': col, 'align': 'left', **ann_kwargs} for prc, 
+                     xpos, ypos, col in zip(annots_top, annots_top_pos, annots_ypos, annots_color) if prc != '0.00%' ]
+    kw_cont.update({'annotations': annots_bot + annots_top})
+
+    # фигура
+    if display_graph:
+        fig = go.Figure(data = objects_cont, layout = kw_cont)
+        fig.show(config = {'displayModeBar': False})
+    else:
+        return objects_cont, kw_cont
 #%%
+def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Прерывистые переменные</b>', display_graph = True):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from plotly import graph_objs as go
+    from plotly.subplots import make_subplots
+    from plotly.figure_factory import create_distplot
+
+    title = (f'<b>{title}</b>')
+    groups_num = len(groups)
+    df = df[ df[grouper].isin(groups) ]
+    discrete = discrete_vars
+    df_discrete = df[discrete + [grouper]]
+    df_discrete = df_discrete.copy()
+    groups_cnt = df[grouper].value_counts()
+
+    # рассчитываем, сколько требуется строк
+    resid = len(discrete) % 2
+    nrows = int(np.ceil((len(discrete) // 2) + resid))
+
+    # создание осей, по две оси в ряду. их либо ровно сколько нужно, либо на одну больше - но к лишней 
+    # заголовка не будет
+    fig = make_subplots(rows = nrows, cols = 2, subplot_titles = discrete, horizontal_spacing = 0.07, 
+                        vertical_spacing = 0.3 / nrows)
+
+    # координаты всех осей. возможно, одна лишняя, но если так, то внутри zip она просто будет проигнорирована
+    row_coords = np.sort(np.concatenate([np.arange(1, nrows + 1), np.arange(1, nrows + 1)]))
+    col_coords = [1, 2] * nrows
+    coords = [{'row': row, 'col': col} for col, row in zip(col_coords, row_coords)]
+
+    # цветовая палитра для групп
+    cmap = plt.get_cmap('tab10', groups_num)
+    colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+    colors_03 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.3})' for i in np.arange(groups_num)]
+
+    # итерируемся по графикам (переменным и осям). делаем отметки от нуля до последнего элемента - они будут на оси x
+    for colname, axis_pos in zip(discrete, coords):
+        if df_discrete[colname].dtype.name == 'category':
+            reverse_mapper = dict(zip(df[colname].cat.codes.unique(), df[colname].unique()))
+            df_discrete[colname] = df_discrete[colname].cat.codes
+        else:
+            mapper, reverse_mapper = {}, {}
+            for i, x in enumerate(np.sort(df_discrete[colname].unique())):
+                mapper.update({x: i})
+                reverse_mapper.update({i: x})
+            df_discrete[colname] = df_discrete[colname].map(mapper)
+        xticks_cnt = len(reverse_mapper)
+        symbol_length_max = max([len(str(x)) for x in reverse_mapper.values()])
+
+    # выбираем, отображать ли ось x и как это делать
+        xticks = np.arange(xticks_cnt)
+        ticktext = [reverse_mapper[x] for x in xticks]
+        if (xticks_cnt <= 18) & (symbol_length_max <= 3):
+            showticklabels = True
+        elif symbol_length_max <= 3:
+            best_resid = xticks_cnt
+            for divider in np.arange(12, 19):
+                resid = (xticks_cnt - 1) % divider
+                if resid < best_resid:
+                    best_resid = resid
+                    best_divider = divider
+            first_half_resid = np.ceil(best_resid / 2)
+            second_half_resid = best_resid - first_half_resid
+            step = (xticks_cnt - 1) // best_divider
+            xticks_visible = np.arange(first_half_resid, (xticks_cnt - second_half_resid - 1) + step * 0.1, step)
+            showticklabels = True
+    # если некоторые отметки (а не все) скрыты, и отображаемые отличаются от используемых ("сырых"), то скрытые 
+    # нужно заменить пробелом (' '), иначе в hover'е они будут отображаться в "сыром" виде (от нуля до xticks_cnt)
+            if (reverse_mapper[xticks[0]] != xticks[0]) & (reverse_mapper[xticks[-1]] != xticks[-1]):
+                ticktext = [reverse_mapper[x] if x in xticks_visible else ' ' for x in xticks]
+            else:
+                xticks = xticks_visible
+                ticktext = [reverse_mapper[x] for x in xticks]
+        else:
+            showticklabels = False
+
+    # имена групп в легенду передаются из первого графика. имена с остальных графиков, чтобы не дублировались, 
+    # я скрыл 
+        if (axis_pos['row'] == 1) and (axis_pos['col'] == 1):
+            showlegend = True
+        else:
+            showlegend = False
+
+
+    # рисуем столько гистограмм, сколько групп. собираем данные для отрисовки pdf-кривых 
+        hist_data = []
+        group_names = []    
+        for color03, color, (i, gr) in zip(colors_03, colors, enumerate(groups)):
+            vals = df_discrete.loc[ df_discrete[grouper] == gr, colname ].values
+            name = f"Группа '{gr}'<br>({groups_cnt[gr]} записей)"
+            hist_data.append(vals)
+            group_names.append(name)
+            fig.add_trace(go.Histogram(x = vals, histnorm = 'probability', marker = {'color': color03}, 
+                          text = [f"Группа '{gr}'<extra></extra>"] * xticks_cnt, 
+                          hovertemplate = "%{y:.1%}: %{text}",
+                          legendgroup = name, showlegend = False, xbins = {'start': -0.5, 'size': 1}, 
+                          name = name), **axis_pos)
+
+    # кривые pdf может нарисовать функция из figure_factory. т.к. функция возвращает фигуру, нужно обработать фигуру.
+        curves = create_distplot(hist_data = hist_data, group_labels = group_names, colors = colors,
+                            histnorm = 'probability', show_hist = False, show_rug = False)
+        limit_needed = False
+        for go_object in curves.data:
+            fig.add_trace(go.Scatter(go_object, hoverinfo = 'skip', showlegend = showlegend), **axis_pos)
+            if go_object['y'].max() > 1:
+                limit_needed = True
+
+    # настраиваем оси
+        kwargs_yaxis = dict(title_text = ['вероятность' if axis_pos['col'] == 1 else ''][0], 
+                            tickformat = ('%{y}:.3%'), range = (0, 1) if limit_needed else None)
+        kwargs_xaxis = dict(tickmode = 'array', tickvals = xticks, ticktext = ticktext, 
+                            showticklabels = showticklabels, range = (0, xticks_cnt))
+        fig.update_yaxes(**kwargs_yaxis, **axis_pos)
+        fig.update_xaxes(**kwargs_xaxis, **axis_pos)
+
+    # настраиваем layout    
+    height = 400 * nrows
+    if (nrows == 1) & (len(groups) > 6):
+        height = 400 + (60 * (len(groups) - 6))
+    kwargs_disc = dict(height = height, barmode = 'overlay', template = 'simple_white', 
+                       hovermode = 'x', hoverlabel = {'namelength': -1}, title = dict(font_size = 16, y = 1, 
+                       pad = {'b': 80}, text = title, x = 0.5, yanchor = 'bottom', xanchor = 'center', 
+                       xref = 'paper', yref = 'paper'), margin = dict(l = 0, r = 0, t = 120, b = 40))
+    fig.update_layout(**kwargs_disc)
+
+    if display_graph:
+        fig.show(config = {'displaylogo': False, 'scrollZoom': False,
+                   'modeBarButtonsToRemove': ['zoom2d', 'zoomin', 'lasso2d', 'hoverCompareCartesian'
+                                              'hoverClosestCartesian', 'autoScale2d', 'toggleSpikelines'],
+                   'toImageButtonOptions': {'height': None, 'width': None}})
+    else:
+        return fig.data, fig.layout
 #%%
+def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинарные переменные</b>', display_graph = True):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from plotly import graph_objs as go
+
+    title = (f'<b>{title}</b>')
+    groups_num = len(groups)
+    df = df[ df[grouper].isin(groups) ]
+    binary = binary_vars
+    groups_cnt = df[grouper].value_counts()
+    groups_prc = df[grouper].value_counts(normalize = True)
+
+    # цветовая палитра для групп
+    cmap = plt.get_cmap('tab10', groups_num)
+    colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+    colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
+
+    # если выполнены условия для графика с параллельными категориями...
+    if (len(binary) <= 4) & (groups_num <= 4):
+        
+        # цветовая палитра и настройки layout
+        i_for_colorscale = np.linspace(0, 1, groups_num)
+        colorsmap = [[i_for_colorscale[i], 
+                      f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {1})'] for i in np.arange(groups_num)]
+        kwargs_bin = dict(height = 450 + 60 * len(binary), title = dict(font_size = 16, y = 1, 
+                          pad = {'b': 60}, text = title, x = 0.5, yanchor = 'bottom', xanchor = 'center', 
+                          xref = 'paper', yref = 'paper'), margin = dict(t = 120, b = 20))
+        
+        # собираем данные для графика
+        dimensions = []
+        for colname in binary + [grouper]:
+            dimensions.append({
+                'label': colname,
+                'values': df[colname].values})
+            
+        # аргументом color должна быть числовая коллекция (каждое число ассоциируется с цветом)
+        map_grouper = {}
+        for i, gr in enumerate(groups):
+            map_grouper.update({gr: i})
+        color_array = df[grouper].map(map_grouper).values
+            
+        # рисуем график
+        fig = go.Figure(data = [go.Parcats(dimensions = dimensions, line = {'color': color_array, 
+                                'colorscale': colorsmap}, hoveron = 'color', hoverinfo = 'probability', 
+                                tickfont = {'size': 20})])
+        fig.update_layout(kwargs_bin)
+        
+        if display_graph:
+            fig.show(config = {'displayModeBar': False})
+        else:
+            return fig.data, fig.layout
+    # если эти условия не выполнены
+    else:
+        fig = go.Figure()
+        # цветовая палитра
+        cmap = plt.get_cmap('tab10', groups_num)
+        colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+        colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
+
+        # два уникальных значения могут быть любыми. заменим их на 0 и 1, чтобы унифицировать работу со столбцами
+        df_binary = df[binary + [grouper]].copy()
+        reverse_mapper = {}
+        map_binary = df_binary[binary].agg([max, min]).unstack().reset_index()
+        map_binary.columns = ['colname', 'valtype', 'val']
+        for col in binary:
+            temp = map_binary[ (map_binary.colname == col) ]
+            max_val = temp.loc[ temp.valtype == 'max', 'val' ].values[0]
+            min_val = temp.loc[ temp.valtype == 'min', 'val' ].values[0]
+            df_binary[col] = df_binary[col].replace({max_val: 1, min_val: 0}).values
+            reverse_mapper[col] = {0: min_val, 1: max_val}
+
+        # располагаем столбцы на оси y
+        assign_y, yticks_for_bars, yticks_for_colnames, yticklabels = {}, [], [], []
+        y_shift = 1 if len(groups) <= 4 else 2
+        counter = 1 - y_shift
+        for col in binary:
+            temp, assign_y[col] = [], {}
+            counter += y_shift
+            for gr in groups:
+                assign_y[col].update({gr: {'ytick': counter}})
+                temp.append(counter)
+                yticks_for_bars.append(counter)
+                counter += 1
+            yticks_for_colnames.append(np.mean(temp))
+            yticklabels.append(col)
+
+        # рассчитываем ylim и высоту графика
+        ylim = (1 - y_shift, np.max(yticks_for_bars) + y_shift )
+        height = len(yticks_for_bars) * 55
+
+        # рассчитываем основные значения
+        more_or_less_than_80, all_positive_x = [], []
+        bar_width_when_occ_rate_stays_the_same = 0.5
+        for gr in groups:
+            x = df_binary.loc[ df_binary[grouper] == gr, binary ].mean()
+            all_positive_x.extend(x.values)
+            for col in binary:
+                translated_val_1 = reverse_mapper[col][1]
+                translated_val_0 = reverse_mapper[col][0]
+
+                # встречаемость значений 1 в группе
+                rvg = x[col]
+                assign_y[col][gr].update({'xtick_1': rvg})
+                rvg_1_hover = (f"Встречаемость значений '{translated_val_1}' ('{col}') "
+                               f"в группе '{gr}': {'<b>{:.1%}</b>'.format(rvg)}")
+                assign_y[col][gr].update({'rvg_1_hover': rvg_1_hover})
+                # встречаемость значений 0 в группе
+                assign_y[col][gr].update({'xtick_0': -1 * (1 - rvg)})
+                rvg_0_hover = (f"Встречаемость значений '{translated_val_0}' ('{col}') "
+                               f"в группе '{gr}': {'<b>{:.1%}</b>'.format(1 - rvg)}")
+                assign_y[col][gr].update({'rvg_0_hover': rvg_0_hover})
+
+                # встречаемость группы в значениях 1 и расчёт ширины столбца
+                rgv_1 = df_binary[ df_binary[col] == 1 ][grouper].value_counts(normalize = True)
+                if gr in rgv_1.index:
+                    rgv_1 = rgv_1[gr]
+                else:
+                    rgv_1 = 0
+                occurence_frequency_change = (rgv_1 / groups_prc[gr]) - 1
+                if occurence_frequency_change > 0.8:
+                    bar_width = ((1.8) * bar_width_when_occ_rate_stays_the_same)
+                    more_or_less_than_80.append([col, gr, 1, bar_width / 2])
+                elif occurence_frequency_change < -0.8:
+                    bar_width = ((0.2) * bar_width_when_occ_rate_stays_the_same)
+                    more_or_less_than_80.append([col, gr, 1, bar_width / 2])
+                else:
+                    bar_width = ((1 + occurence_frequency_change) * bar_width_when_occ_rate_stays_the_same)
+                assign_y[col][gr].update({'half_of_bar_width_1': bar_width / 2})
+
+                # ховер
+                if occurence_frequency_change >= 0:
+                    ofq_change = 'на {:.2%} чаще'.format(occurence_frequency_change)
+                else:
+                    ofq_change = 'на {:.2%} реже'.format(occurence_frequency_change)
+                rgv_1_hover = (f"Встречаемость группы '{gr}' в значениях '{translated_val_1}' ('{col}'): "
+                                 f"{'<b>{:.1%}</b>'.format(rgv_1)}")
+                occ_hover_1 = f"(это <b>{ofq_change}</b>, чем в среднем)"
+                assign_y[col][gr].update({'rgv_1_hover': rgv_1_hover})
+                assign_y[col][gr].update({'occ_hover_1': occ_hover_1})
+
+                # встречаемость группы в значениях 0 и расчёт ширины столбца 
+                rgv_0 = df_binary[ df_binary[col] == 0 ][grouper].value_counts(normalize = True)
+                if gr in rgv_0.index:
+                    rgv_0 = rgv_0[gr]
+                else:
+                    rgv_0 = 0
+                occurence_frequency_change = (rgv_0 / groups_prc[gr]) - 1
+                if occurence_frequency_change > 0.8:
+                    bar_width = ((1.8) * bar_width_when_occ_rate_stays_the_same)
+                    more_or_less_than_80.append([col, gr, 0])
+                elif occurence_frequency_change < -0.8:
+                    bar_width = ((0.2) * bar_width_when_occ_rate_stays_the_same)
+                    more_or_less_than_80.append([col, gr, 0])
+                else:
+                    bar_width = ((1 + occurence_frequency_change) * bar_width_when_occ_rate_stays_the_same)
+                assign_y[col][gr].update({'half_of_bar_width_0': bar_width / 2})
+
+                # ховер
+                if occurence_frequency_change >= 0:
+                    ofq_change = 'на {:.2%} чаще'.format(occurence_frequency_change)
+                else:
+                    ofq_change = 'на {:.2%} реже'.format(occurence_frequency_change)
+                rgv_0_hover = (f"Встречаемость группы '{gr}' в значениях '{translated_val_0}' ('{col}'): "
+                                 f"{'<b>{:.1%}</b>'.format(rgv_0)}")
+                occ_hover_0 = f"(это <b>{ofq_change}</b>, чем в среднем)"
+                assign_y[col][gr].update({'rgv_0_hover': rgv_0_hover})
+                assign_y[col][gr].update({'occ_hover_0': occ_hover_0})
+
+        # находим xlim и отметки на оси x
+        xlim = (np.min(-1 * (1 - np.array(all_positive_x))), max(all_positive_x))
+        xlim_shift = (xlim[1] - xlim[0]) * 0.1
+        xlim_plus = (xlim[0] - xlim_shift, xlim[1] + xlim_shift)
+        xtickvals_0 = np.arange(-0.2, float(str(xlim[0])[:4]), -0.2)
+        xtickvals_1 = np.arange(0.2, float(str(xlim[1])[:4]) + 0.01, 0.2)
+        xtickvals = np.concatenate([xtickvals_0, xtickvals_1])
+        xticktext = ['{:.0%}'.format(x) for x in abs(xtickvals)]
+
+        # настраиваем layout
+        kwargs_bin = dict(yaxis = dict(tickmode = 'array', tickvals = yticks_for_colnames, showgrid = False,
+                          ticktext = yticklabels, range = (ylim[0], ylim[1])), height = height,
+                          xaxis = dict(range = (xlim_plus[0], xlim_plus[1]), tickmode = 'array', 
+                          tickvals = xtickvals, ticktext = xticktext), template = 'plotly_white',
+                          hoverlabel = {'namelength': 0}, title = dict(font_size = 16, y = 1, 
+                          pad = {'b': 40}, text = title, x = 0.5, yanchor = 'bottom', xanchor = 'center', 
+                          xref = 'paper', yref = 'paper'), margin = dict(l = 0, r = 0, t = 80, b = 80))
+        fig.update_layout(**kwargs_bin)
+
+        # нужно сделать две подписи оси x, поэтому добавляем их вручную как обычный текст
+        for val, xticks in zip([0, 1], [xtickvals_0, xtickvals_1]):
+            fig.add_annotation(text = f"$P({val}\ \ |\ группа)$", y = -1 * (35 / height), yref = 'paper', 
+                               showarrow = False, yanchor = 'top', x = np.mean(xticks), xanchor = 'center', 
+                               xref = 'x', font_size = 13)
+
+        # рисуем центральную линию и силуэты встречаемости
+        fig.add_vline(x = 0, line_width = 3, line_color = 'black')
+        for y in yticks_for_bars:
+            fig.add_hrect(y0 = y - 0.25, y1 = y + 0.25, line_width = 0, fillcolor = 'grey', opacity = 0.15)
+
+        # рисуем столбцы
+        for gr, color, color05 in zip(groups, colors, colors_05):
+            name = f"Группа '{gr}'<br>({groups_cnt[gr]} записей)"
+            for i, col in enumerate(binary):
+                showlegend = True if i == 0 else False
+                info = assign_y[col][gr]
+                y0 = info['ytick'] - info['half_of_bar_width_1']
+                y1 = info['ytick'] + info['half_of_bar_width_1']
+                x0 = 0
+                x1 = info['xtick_1']
+                hover = '<br>'.join([info['rvg_1_hover'], info['rgv_1_hover'], info['occ_hover_1']])
+                fig.add_trace(go.Scatter(x = [x0, x1, x1, x0, x0], y = [y0, y0, y1, y1, y0], fill = 'toself', 
+                                         text = hover, texttemplate = '%{text}', fillcolor = color05, 
+                                         mode = 'lines', name = name, line = {'color': color}, showlegend = showlegend,
+                                         hoverlabel = {'align': 'right'}, legendgroup = name))
+                y0 = info['ytick'] - info['half_of_bar_width_0']
+                y1 = info['ytick'] + info['half_of_bar_width_0']
+                x1 = info['xtick_0']
+                hover = '<br>'.join([info['rvg_0_hover'], info['rgv_0_hover'], info['occ_hover_0']])
+                fig.add_trace(go.Scatter(x = [x0, x1, x1, x0, x0], y = [y0, y0, y1, y1, y0], fill = 'toself', 
+                                         text = hover, hovertemplate = '%{text}', fillcolor = color05, 
+                                         mode = 'lines', name = name, line = {'color': color}, showlegend = False,
+                                         hoverlabel = {'align': 'right'}, legendgroup = name))
+
+        # пометим серыми точками столбцы, которым соответствует изменение встречаемости больше чем на 80%
+        x, y = [], []
+        for params in more_or_less_than_80:
+            col, gr, val = params[0], params[1], params[2]
+            y.append(assign_y[col][gr]['ytick'])
+            x.append((xlim[0] - xlim_shift * 0.5) if val == 0 else (xlim[1] + xlim_shift * 0.7))
+        fig.add_trace(go.Scatter(x = x, y = y, mode = 'markers', hoverinfo = 'skip', marker = {'size': 10, 'symbol': 0,
+                                 'color': 'black'}, opacity = 0.15, showlegend = False))
+
+        if display_graph:
+            fig.show(config = {'displaylogo': False, 'scrollZoom': False,
+                       'modeBarButtonsToRemove': ['zoom2d', 'zoomin', 'lasso2d', 'hoverCompareCartesian'
+                                                  'hoverClosestCartesian', 'autoScale2d', 'toggleSpikelines'],
+                       'toImageButtonOptions': {'height': None, 'width': None}})
+        else:
+            return fig.data, fig.layout
 #%%
+def few_groups_distribution(df, grouper, vars_type = 'all', title = '', 
+                            groups = None, continuous_vars = None, discrete_vars = None, binary_vars = None):
+    import pandas as pd
+    import numpy as np
+    from plotly import graph_objs as go
+    from collections import defaultdict
+    
+    # проверка того, сколько групп - их должно быть не больше десяти
+    if not groups:
+        groups = np.sort(df[grouper].unique())
+    groups_cnt = len(groups)
+    if groups_cnt > 10:
+        print(f'Групп больше десяти (их {groups_cnt})')
+        return
+    
+    # определим тип каждой переменной
+    def col_types(df, vars_type):
+        coltypes = defaultdict(list)
+        cols = df.select_dtypes(include = np.number).columns.tolist()
+        three, four = [], []
+        for col in set(df.columns).difference(cols):
+            nuniq = df[col].nunique()
+            if nuniq == 2:
+                coltypes['binary'].append(col)
+            elif nuniq <= 25:
+                if nuniq == 3:
+                    three.append(col)
+                elif nuniq == 4:
+                    four.append(col)
+                else:
+                    coltypes['discrete'].append(col)
+        for col in cols:
+            nuniq = df[col].nunique()
+            if nuniq == 2:
+                coltypes['binary'].append(col)
+            elif nuniq <= 70:
+                if nuniq == 3:
+                    three.append(col)
+                elif nuniq == 4:
+                    four.append(col)
+                else:
+                    coltypes['discrete'].append(col)
+            elif (nuniq / df[col].shape[0] < 0.25) & (nuniq > 70):
+                if df[col].dtype in ('int64', 'int32', 'int16', 'int8', 'uint8', 'uint16', 'uint32'):
+                    dec = 0
+                else: 
+                    dec = 2
+                df[f'{col}_cut25'] = pd.cut(df[col], 25, include_lowest = True)
+                df[f'{col}_cut25'] = df[f'{col}_cut25'].apply(customizing_intervals, args = ('numeric', dec, True))
+                coltypes['discrete'].append(f'{col}_cut25')
+            else:
+                coltypes['continuous'].append(col)
+        
+        # переменные с 3 или 4 уникальными значениями будут лучше смотреться в пар.категориях, если тот не 
+        # слишком загромождён. если же вызван график для дискретных переменных, такие переменные всё-таки
+        # стоит считать дискретными и включить в "дискретный" график
+        for col in three + four:
+            if (len(coltypes['binary']) < 4) & (vars_type != 'discrete') & (groups_cnt <= 4):
+                coltypes['binary'].append(col)
+            else:
+                coltypes['discrete'].append(col)
+        return df, dict(coltypes)
+
+    # если указаны отдельные столбцы, перададим функциям их. если не указаны, то передадим все найденные
+    grouper_col = df[grouper]
+    df, coltypes = col_types(df.drop([grouper], axis = 1), vars_type)
+    df[grouper] = grouper_col
+    if not continuous_vars:
+        continuous_vars = coltypes.get('continuous')
+    if not discrete_vars:
+        discrete_vars = coltypes.get('discrete')
+    if not binary_vars:
+        binary_vars = coltypes.get('binary')
+        
+    # развилка, четыре варианта
+    if vars_type == 'continuous':
+        fgd_in_continuous_vars(df, grouper, groups = groups, title = title, continuous_vars = continuous_vars)
+    elif vars_type == 'discrete':
+        fgd_in_discrete_vars(df, grouper, groups = groups, title = title, discrete_vars = discrete_vars)
+    elif vars_type == 'binary':
+        fgd_in_binary_vars(df, grouper, groups = groups, title = title, binary_vars = binary_vars)
+    elif vars_type == 'all':
+        
+        # проверка того, есть ли переменные всех типов для параметра 'all'
+        if not all([continuous_vars, discrete_vars, binary_vars]):
+            for l, vartype in zip([continuous_vars, discrete_vars, binary_vars], 
+                                  ['continuous', 'discrete', 'binary']):
+                if not l:
+                    print(f"В переданном датафрейме нет переменных типа '{vartype}'")
+            return
+        
+        # строю и возвращаю графики
+        obj_c, layout_c = fgd_in_continuous_vars(df, grouper, groups = groups, continuous_vars = continuous_vars, 
+                               display_graph = False)
+        obj_d, layout_d = fgd_in_discrete_vars(df, grouper, groups = groups, discrete_vars = discrete_vars,
+                             display_graph = False)
+        obj_b, layout_b = fgd_in_binary_vars(df, grouper, groups = groups, binary_vars = binary_vars,
+                             display_graph = False, title = f'{title}<br><br><br>Бинарные переменные')
+        
+        # переписываю margin и title
+        layout_b.update(dict(margin = {'t': 150}))
+        layout_b['title'].update(dict(y = 1, pad = {'b': 120}))
+        
+        # строю бинарные переменные и отображаю
+        go.Figure(data = obj_b, layout = layout_b).show(config = {'displaylogo': False, 'scrollZoom': False,
+                       'modeBarButtonsToRemove': ['zoom2d', 'zoomin', 'lasso2d', 'hoverCompareCartesian'
+                                                  'hoverClosestCartesian', 'autoScale2d', 'toggleSpikelines'],
+                       'toImageButtonOptions': {'height': None, 'width': None}})
+        
+        # строю дискретные переменные и отображаю
+        go.Figure(data = obj_d, layout = layout_d).show(config = {'displaylogo': False, 'scrollZoom': False,
+                   'modeBarButtonsToRemove': ['zoom2d', 'zoomin', 'lasso2d', 'hoverCompareCartesian'
+                                              'hoverClosestCartesian', 'autoScale2d', 'toggleSpikelines'],
+                   'toImageButtonOptions': {'height': None, 'width': None}})
+        
+        # строю непрерывные переменные и отображаю
+        go.Figure(data = obj_c, layout = layout_c).show(config = {'displayModeBar': False})
 #%%
 #%%
 #%%
