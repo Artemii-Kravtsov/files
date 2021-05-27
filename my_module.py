@@ -93,7 +93,7 @@ def wipe_globals(*but_keep_those):
     collect()
     return
 #%%
-def downcast_convertion(df):
+def downcast_convertion(df, to_categories = True):
     """
     К числовым столбцам применяет to_numeric(downcast = ...), 
     Строковые столбцы переводит в формат category, если в них 
@@ -113,11 +113,12 @@ def downcast_convertion(df):
                 df[column_name] = pd.to_numeric(df[column_name], errors = 'raise', downcast = 'unsigned')
             else: 
                 df[column_name] = pd.to_numeric(df[column_name], errors = 'raise', downcast = 'signed')     
-
-    if len(df.select_dtypes(include = ['object']).columns) > 0:    
-        for column_name in df.select_dtypes(include = ['object']).columns:
-            if len(df[column_name].unique()) / 0.3 < len(df[column_name]):
-                df[column_name] = df[column_name].astype('category')
+   
+    if to_categories:
+        if len(df.select_dtypes(include = ['object']).columns) > 0:    
+            for column_name in df.select_dtypes(include = ['object']).columns:
+                if len(df[column_name].unique()) / 0.3 < len(df[column_name]):
+                    df[column_name] = df[column_name].astype('category')
                 
     return df
 #%%
@@ -1623,7 +1624,8 @@ def paired_ttest(first, second, alpha = 0.05, illustrate = True, descr = ['', ''
         display(fig)
         plt.close(fig)
 #%%
-def qq_plot(samp, no_qq_table = True, alpha = None, title = False, ax = False, real_SE = None):
+def qq_plot(samp, no_qq_table = True, alpha = None, title = False, 
+            ax = False, real_SE = None, save_name = None):
     """
     Строит qq-plot, проводит три теста на нормальность.
     Если не указать 'qq_table = False', выводит первые и последние 
@@ -1729,6 +1731,8 @@ def qq_plot(samp, no_qq_table = True, alpha = None, title = False, ax = False, r
     
     if no_initial_ax:     
         display(fig)
+        if save_name:
+            plt.savefig(save_name, bbox_inches = 'tight', pad_inches = 0)
         plt.close(fig)
     
     if not no_qq_table:
@@ -1760,8 +1764,6 @@ def qq_plot(samp, no_qq_table = True, alpha = None, title = False, ax = False, r
             print('\t- Не получилось отвергнуть нулевую гипотезу, переменная распределена нормально')
         elif all([x < alpha for x in [ks, shapiro, jb]]):
             print('\t- Отвергаем нулевую гипотезу: распределение не нормально')
-        else:
-            print('\t- Отличия от нормальности неоднозначны')
 #%%
 def page(URL, headers = {}, open_in_chrome = False):
     """
@@ -1990,7 +1992,9 @@ def my_display(df, index_name = None, col_names = None):
         df.columns = col_names
     display(df)
 #%%
-def ab_conversion(daily, date_col, group_col, clients_cum_col, conv_col, mapper, figsize, return_fig = False, alpha = 0.05, legend = ['A', 'B']):
+def ztest_conversion(daily, date_col, group_col, users_cum_col, clients_cum_col, mapper, figsize, 
+                  return_fig = False, alpha = 0.05, legend = ['A', 'B'],
+                  title_left = 'Накопительная конверсия', title = None, save_name = None):
     import scipy.stats as st
     import numpy as np 
     import matplotlib.pyplot as plt
@@ -2014,16 +2018,31 @@ def ab_conversion(daily, date_col, group_col, clients_cum_col, conv_col, mapper,
             fontsize = 'medium'            
         ax.legend(fontsize = fontsize)
         ax.grid(b = True, axis = 'y')
+        
+    daily = daily.copy()
+    daily['Conversion'] = daily[clients_cum_col].div(daily[users_cum_col])
+    conv_col = 'Conversion'
     
-    fig, ax1, ax2 = two_subplots(figsize, ['накопительная C1', 'разница между группами'])
-    xticks = np.arange(1, daily[date_col].drop_duplicates().shape[0] + 1)
+    fig, ax1, ax2 = two_subplots(figsize, [title_left, 'Разница между группами'])
+    xticks = np.arange(1, daily[date_col].drop_duplicates().shape[0] + 1) 
 
     for group, color, legend in zip(['A', 'B'], ['#9a0200', '#789b73'], legend):
         data_sliced = daily[ daily[group_col] == mapper[group] ]
-        ax1.plot(xticks, data_sliced[conv_col], label = f'группа {legend}', 
+        ax1.plot(xticks, data_sliced[conv_col], label = f'{legend}', 
                  color = color, linewidth = 2.5)
-    customize_ax(ax1, 'накопительная C1, %', xticks, figsize)
-    ax1.vlines(xticks, ax1.get_ylim()[0], data_sliced[conv_col], alpha = 0.5, linestyle = 'dotted')
+    customize_ax(ax1, 'накопительная конверсия, %', xticks, figsize)
+    
+    final_conv_a = daily[ daily[group_col] == mapper['A']  ][conv_col].max()
+    final_conv_b = daily[ daily[group_col] == mapper['B']  ][conv_col].max()
+    
+    if final_conv_a > final_conv_b:
+        ax1.vlines(xticks, ax1.get_ylim()[0], 
+                   daily[ daily[group_col] == mapper['A'] ][conv_col], alpha = 0.5, 
+                   linestyle = 'dotted', color = '#840000')
+    else:
+        ax1.vlines(xticks, ax1.get_ylim()[0], 
+                   daily[ daily[group_col] == mapper['B'] ][conv_col], alpha = 0.5, 
+                   linestyle = 'dotted')
 
     difference_overall = (daily.loc[ daily[group_col] == mapper['B'], conv_col ].values 
                           - daily.loc[ daily[group_col] == mapper['A'], conv_col ].values)
@@ -2069,6 +2088,12 @@ def ab_conversion(daily, date_col, group_col, clients_cum_col, conv_col, mapper,
             ax2.scatter([], [], color = 'green', s = 50, label = 'p-value < 0.01')
     customize_ax(ax2, 'разница долей, %', xticks, figsize)
     
+    if title:
+        fig.suptitle(title, fontsize = 18, y = 1.15)
+        
+    if save_name:
+        plt.savefig(save_name, bbox_inches = 'tight', pad_inches = 0)
+    
     if return_fig:
         return fig
     display(fig)
@@ -2105,8 +2130,8 @@ detail_tag_in_portfolio([a, b, c, d, e, f, g, h, i, j, k, l, m, n, o])
 """
 #%%
 def my_info(df):
-    import pandas
-    import numpy
+    import pandas as pd
+    import numpy as np
     info = pd.DataFrame(index = df.columns, columns = ['type', 'not_null_cnt', 'nunique', '', 'mean', 'min', 
                                                        '25%', '50%', '75%', 'max'])
     numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
@@ -2132,7 +2157,10 @@ def my_info(df):
             info.loc[col, '75%'] = df[col].quantile(0.75)
         else:
             nuniq = df[col].nunique()
-            if nuniq / df[col].shape[0] > 0.25:
+            if 'datetime' in df[col].dtype.name:
+                info.loc[col, 'nunique'] = nuniq
+                info.loc[col, ''] = 'datetime'
+            elif nuniq / df[col].shape[0] > 0.25:
                 info.loc[col, 'nunique'] = nuniq
                 info.loc[col, ''] = 'varchar'
             elif nuniq == 2:
@@ -2663,11 +2691,20 @@ def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>Н�
         ax_height = 60 * (len(continuous) * (coef * groups_num))
 
     # цветовая палитра для групп
-    cmap = plt.get_cmap('tab10', groups_num)
-    colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
-    colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
+    if groups_num == 2:
+        colors = ['rgba(0.2, 0.19, 0.14, 1)', 'rgba(0.76, 0.58, 0.27, 1)']
+        colors_05 = ['rgba(0.2, 0.19, 0.14, 0.5)', 'rgba(0.76, 0.58, 0.27, 0.5)']
+    else:
+        cmap = plt.get_cmap('tab10', groups_num)
+        colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+        colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
 
     # график непрерывных
+    if (('str' in groups.dtype.name) or ('object' in groups.dtype.name)):
+        gn_text = ''
+    else:
+        gn_text = 'Группа '
+    
     objects_cont = []
     add_space_to_leg = ['<br>' if (len(continuous) > 2) & (groups_num > 2) else ''][0]
     for i, gr in enumerate(groups):
@@ -2676,7 +2713,7 @@ def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>Н�
         x = [j for i in x for j in i]
         y = [j for i in y for j in i]
         objects_cont.append(go.Box(x = x, y = y, marker_color = colors[i], hoverinfo = 'skip', boxmean = True,
-                                   name = f"{add_space_to_leg}Группа '{gr}'<br>({groups_cnt[gr]} записей)",
+                                   name = f"{add_space_to_leg}{gn_text}'{gr}'<br>({groups_cnt[gr]} записей)",
                                    width = width, orientation = 'h'))
 
     # параметры графика непрерывных переменных
@@ -2729,7 +2766,8 @@ def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>Н�
     else:
         return objects_cont, kw_cont
 #%%
-def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Прерывистые переменные</b>', display_graph = True):
+def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Прерывистые переменные</b>', 
+                         display_graph = True):
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2760,14 +2798,20 @@ def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Пре�
     coords = [{'row': row, 'col': col} for col, row in zip(col_coords, row_coords)]
 
     # цветовая палитра для групп
-    cmap = plt.get_cmap('tab10', groups_num)
-    colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
-    colors_03 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.3})' for i in np.arange(groups_num)]
+    if groups_num == 2:
+        colors = ['rgba(0.2, 0.19, 0.14, 1)', 'rgba(0.76, 0.58, 0.27, 1)']
+        colors_03 = ['rgba(0.2, 0.19, 0.14, 0.3)', 'rgba(0.76, 0.58, 0.27, 0.3)']
+    else:
+        cmap = plt.get_cmap('tab10', groups_num)
+        colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+        colors_03 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.3})' for i in np.arange(groups_num)]
 
     # итерируемся по графикам (переменным и осям). делаем отметки от нуля до последнего элемента - они будут на оси x
     for colname, axis_pos in zip(discrete, coords):
         if df_discrete[colname].dtype.name == 'category':
-            reverse_mapper = dict(zip(df[colname].cat.codes.unique(), df[colname].unique()))
+            reverse_mapper = {}
+            for i, x in enumerate(df[colname].cat.categories):
+                reverse_mapper.update({i: x})
             df_discrete[colname] = df_discrete[colname].cat.codes
         else:
             mapper, reverse_mapper = {}, {}
@@ -2815,10 +2859,15 @@ def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Пре�
 
     # рисуем столько гистограмм, сколько групп. собираем данные для отрисовки pdf-кривых 
         hist_data = []
-        group_names = []    
+        group_names = []
+        if (('str' in groups.dtype.name) or ('object' in groups.dtype.name)):
+            gn_text = ''
+        else:
+            gn_text = 'Группа '
+            
         for color03, color, (i, gr) in zip(colors_03, colors, enumerate(groups)):
             vals = df_discrete.loc[ df_discrete[grouper] == gr, colname ].values
-            name = f"Группа '{gr}'<br>({groups_cnt[gr]} записей)"
+            name = f"{gn_text}'{gr}'<br>({groups_cnt[gr]} записей)"
             hist_data.append(vals)
             group_names.append(name)
             fig.add_trace(go.Histogram(x = vals, histnorm = 'probability', marker = {'color': color03}, 
@@ -2826,10 +2875,18 @@ def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Пре�
                           hovertemplate = "%{y:.1%}: %{text}",
                           legendgroup = name, showlegend = False, xbins = {'start': -0.5, 'size': 1}, 
                           name = name), **axis_pos)
-
+        
     # кривые pdf может нарисовать функция из figure_factory. т.к. функция возвращает фигуру, нужно обработать фигуру.
-        curves = create_distplot(hist_data = hist_data, group_labels = group_names, colors = colors,
-                            histnorm = 'probability', show_hist = False, show_rug = False)
+        try:
+            curves = create_distplot(hist_data = hist_data, group_labels = group_names, colors = colors,
+                                histnorm = 'probability', show_hist = False, show_rug = False)
+        except:
+        # есть такая проблема как perfect correlation between few series, которой можно избежать, 
+        # добавив немного шума в данные
+            hist_data = [x + 0.00001 * np.random.rand(len(x)) for x in hist_data]
+            curves = create_distplot(hist_data = hist_data, group_labels = group_names, colors = colors,
+                                histnorm = 'probability', show_hist = False, show_rug = False)
+            
         limit_needed = False
         for go_object in curves.data:
             fig.add_trace(go.Scatter(go_object, hoverinfo = 'skip', showlegend = showlegend), **axis_pos)
@@ -2876,9 +2933,13 @@ def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинар�
     groups_prc = df[grouper].value_counts(normalize = True)
 
     # цветовая палитра для групп
-    cmap = plt.get_cmap('tab10', groups_num)
-    colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
-    colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
+    if groups_num == 2:
+        colors = ['rgba(0.2, 0.19, 0.14, 1)', 'rgba(0.76, 0.58, 0.27, 1)']
+        colors_05 = ['rgba(0.2, 0.19, 0.14, 0.5)', 'rgba(0.76, 0.58, 0.27, 0.5)']
+    else:
+        cmap = plt.get_cmap('tab10', groups_num)
+        colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+        colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
 
     # если выполнены условия для графика с параллельными категориями...
     if (len(binary) <= 4) & (groups_num <= 4):
@@ -2917,10 +2978,15 @@ def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинар�
     # если эти условия не выполнены
     else:
         fig = go.Figure()
+        
         # цветовая палитра
-        cmap = plt.get_cmap('tab10', groups_num)
-        colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
-        colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
+        if groups_num == 2:
+            colors = ['rgba(0.2, 0.19, 0.14, 1)', 'rgba(0.76, 0.58, 0.27, 1)']
+            colors_05 = ['rgba(0.2, 0.19, 0.14, 0.5)', 'rgba(0.76, 0.58, 0.27, 0.5)']
+        else:
+            cmap = plt.get_cmap('tab10', groups_num)
+            colors = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {cmap(i)[3]})' for i in np.arange(groups_num)]
+            colors_05 = [f'rgba({cmap(i)[0]}, {cmap(i)[1]}, {cmap(i)[2]}, {0.5})' for i in np.arange(groups_num)]
 
         # два уникальных значения могут быть любыми. заменим их на 0 и 1, чтобы унифицировать работу со столбцами
         df_binary = df[binary + [grouper]].copy()
@@ -2951,8 +3017,7 @@ def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинар�
 
         # рассчитываем ylim и высоту графика
         ylim = (1 - y_shift, np.max(yticks_for_bars) + y_shift )
-        height = len(yticks_for_bars) * 55
-
+        height = len(yticks_for_bars) * 40
         # рассчитываем основные значения
         more_or_less_than_80, all_positive_x = [], []
         bar_width_when_occ_rate_stays_the_same = 0.5
@@ -3062,8 +3127,13 @@ def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинар�
             fig.add_hrect(y0 = y - 0.25, y1 = y + 0.25, line_width = 0, fillcolor = 'grey', opacity = 0.15)
 
         # рисуем столбцы
+        if (('str' in groups.dtype.name) or ('object' in groups.dtype.name)):
+            gn_text = ''
+        else:
+            gn_text = 'Группа '
+        
         for gr, color, color05 in zip(groups, colors, colors_05):
-            name = f"Группа '{gr}'<br>({groups_cnt[gr]} записей)"
+            name = f"{gn_text}'{gr}'<br>({groups_cnt[gr]} записей)"
             for i, col in enumerate(binary):
                 showlegend = True if i == 0 else False
                 info = assign_y[col][gr]
@@ -3102,7 +3172,7 @@ def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинар�
         else:
             return fig.data, fig.layout
 #%%
-def few_groups_distribution(df, grouper, vars_type = 'all', title = '', 
+def few_groups_distribution(df, grouper, vars_type = 'all', title = '', bins = 25,
                             groups = None, continuous_vars = None, discrete_vars = None, binary_vars = None):
     import pandas as pd
     import numpy as np
@@ -3112,6 +3182,8 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '',
     # проверка того, сколько групп - их должно быть не больше десяти
     if not groups:
         groups = np.sort(df[grouper].unique())
+    else:
+        groups = np.array(groups)
     groups_cnt = len(groups)
     if groups_cnt > 10:
         print(f'Групп больше десяти (их {groups_cnt})')
@@ -3149,9 +3221,10 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '',
                     dec = 0
                 else: 
                     dec = 2
-                df[f'{col}_cut25'] = pd.cut(df[col], 25, include_lowest = True)
-                df[f'{col}_cut25'] = df[f'{col}_cut25'].apply(customizing_intervals, args = ('numeric', dec, True))
-                coltypes['discrete'].append(f'{col}_cut25')
+                df[f'{col}_cut{bins}'] = pd.cut(df[col], bins, include_lowest = True)
+                df[f'{col}_cut{bins}'] = df[f'{col}_cut{bins}'].apply(customizing_intervals, 
+                                                                      args = ('numeric', dec, True))
+                coltypes['discrete'].append(f'{col}_cut{bins}')
             else:
                 coltypes['continuous'].append(col)
         
@@ -3163,6 +3236,7 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '',
                 coltypes['binary'].append(col)
             else:
                 coltypes['discrete'].append(col)
+                nuniq = df[col].nunique()
         return df, dict(coltypes)
 
     # если указаны отдельные столбцы, перададим функциям их. если не указаны, то передадим все найденные
@@ -3171,7 +3245,20 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '',
     df[grouper] = grouper_col
     if not continuous_vars:
         continuous_vars = coltypes.get('continuous')
-    if not discrete_vars:
+    if discrete_vars:
+        for col in discrete_vars.copy():
+            nuniq = df[col].nunique()
+            if nuniq > bins * 1.25:
+                if df[col].dtype in ('int64', 'int32', 'int16', 'int8', 'uint8', 'uint16', 'uint32'):
+                    dec = 0
+                else: 
+                    dec = 2
+                df[f'{col}_cut{bins}'] = pd.cut(df[col], bins, include_lowest = True)
+                df[f'{col}_cut{bins}'] = df[f'{col}_cut{bins}'].apply(customizing_intervals, 
+                                                                      args = ('numeric', dec, True))
+                discrete_vars.append(f'{col}_cut{bins}')
+                discrete_vars.remove(col)
+    else:
         discrete_vars = coltypes.get('discrete')
     if not binary_vars:
         binary_vars = coltypes.get('binary')
@@ -3220,9 +3307,403 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '',
         # строю непрерывные переменные и отображаю
         go.Figure(data = obj_c, layout = layout_c).show(config = {'displayModeBar': False})
 #%%
+def draw_table(df, colwidths = None, mode = 'save', save_name = 'my_table.png'):
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    
+    column_headers = df.columns
+    row_headers = df.index
+    data = df.values.astype(str)
+    n_rows = len(data)
+    rcolors = [[1, 1, 1, 1] for i in range(len(row_headers)) ]
+    ccolors = [[1, 1, 1, 1] for i in range(len(column_headers)) ]
+    cell_colors = [[[0.949, 0.949, 0.949, 1] for j in i] for i in data] 
+    cell_text = []
+    for row in data:
+        cell_text.append([x for x in row])
+
+    plt.figure(linewidth = 2,
+               figsize = (12, (0.65 * n_rows)))
+
+    the_table = plt.table(cellText = cell_text,
+                          colWidths = colwidths,
+                          rowLabels = row_headers,
+                          rowLoc = 'right',
+                          rowColours = rcolors,
+                          colColours = ccolors,
+                          cellColours = cell_colors,
+                          colLabels = column_headers,
+                          loc = 'center')
+
+    ax = plt.gca()
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    plt.box(on = None)
+    the_table.scale(1.8, 2.7)
+    the_table.auto_set_font_size(False)
+    the_table.set_fontsize(14)
+    if mode == 'save':
+        plt.savefig(save_name, bbox_inches = 'tight', dpi = 180)
+        plt.close(plt.gcf())
+    elif mode == 'show':
+        display(plt.gcf())
+        plt.close(plt.gcf())
+#%%
+class color:
+    PURPLE = '\033[95m'
+    CYAN = '\033[96m'
+    DARKCYAN = '\033[36m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    END = '\033[0m'
+#%%
+def time_series(df, date_col, period = 'hours', title = '', ax = None, fontsize = 18, xlabels_sizes = 13):
+    import pandas as pd
+    import numpy as np 
+    import matplotlib.pyplot as plt
+    if period == 'hours':
+        aux = (df[date_col].astype('datetime64[h]').value_counts().sort_index()
+               .reset_index().rename({'index': 'targ'}, axis=1))
+        first_index_for_every_day = aux['targ'].astype('datetime64[D]').reset_index().groupby('targ')['index'].first()
+        xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
+        if not ax:
+            fig, ax = plt.subplots(figsize = (18, 3))
+        ax.plot(aux.targ, aux[date_col], linewidth = 2, color = '#789b73')
+        ax.set(xticks = xticks.targ_y, xlim = (aux.targ.min(), aux.targ.max()))
+        ax.set_ylabel('кол-во наблюдений', fontsize = 12)
+        ax.set_title(title, fontsize = fontsize, y = 1.05)
+        ax.set_xticklabels(xticks.targ_y.dt.strftime('%d %h, %H:00'), rotation = 45, fontsize = xlabels_sizes, ha = 'right')
+        ax.grid(b = True, axis = 'x')
+    
+    if period == 'days':
+        aux = (df[date_col].astype('datetime64[D]').value_counts().sort_index()
+               .reset_index().rename({'index': 'targ'}, axis=1))
+        first_index_for_every_day = aux['targ'].astype('datetime64[M]').reset_index().groupby('targ')['index'].first()
+        xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
+        if not ax:
+            fig, ax = plt.subplots(figsize = (18, 3))
+        ax.plot(aux.targ, aux[date_col], linewidth = 2, color = '#789b73')
+        ax.set(xticks = xticks.targ_y, xlim = (aux.targ.min(), aux.targ.max()))
+        ax.set_ylabel('кол-во наблюдений', fontsize = 12)
+        ax.set_title(title, fontsize = fontsize, y = 1.05)
+        ax.set_xticklabels(xticks.targ_y.dt.strftime("%b'%y, %d"), rotation = 45, fontsize = xlabels_sizes,  ha = 'right')
+        ax.grid(b = True, axis = 'x')
+
+    
+    if not ax:
+        display(fig)
+        plt.close(fig)
+    
+#%%
+def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha = 0.05, save_name = None):
+    from statsmodels.stats.proportion import proportions_ztest
+    
+    sample_a = np.random.binomial(trials1, c1, iters_cnt)
+    sample_b_h1 = np.random.binomial(trials2, c2, iters_cnt)
+    sample_b_h0 = np.random.binomial(trials2, c1, iters_cnt)
+    samples_stacked_h1 = np.column_stack((sample_a, sample_b_h1))
+    samples_stacked_h0 = np.column_stack((sample_a, sample_b_h0))
+    
+    pvalues_ztest_h1 = [proportions_ztest([x[0], x[1]], [trials1, trials2])[1] for x in samples_stacked_h1]
+    pvalues_ztest_h0 = [proportions_ztest([x[0], x[1]], [trials1, trials2])[1] for x in samples_stacked_h0]
+    
+    ecdf_h1 = ECDF(pvalues_ztest_h1)
+    ecdf_h0 = ECDF(pvalues_ztest_h0)
+    
+    sensit_h1 = '{:.2f}'.format(ecdf_h1(alpha))
+    if abs(ecdf_h0(alpha) - alpha) > 0.005:
+        sensit_h0 = '{:.3f}'.format(ecdf_h0(alpha)) 
+    else:
+        sensit_h0 = '{:.2f}'.format(ecdf_h0(alpha))
+    
+    dots = np.linspace(0, 1, iters_cnt)
+    xy_ticks_h1 = [alpha] + list(np.arange(0.2, 1.1, 0.2))
+    xy_ticks_h0 = [0.01] + list(np.arange(0.05, 0.21, 0.05))
+    
+    fig, ax1, ax2 = two_subplots((15, 5), 
+                                 f"Кривая CDF для значений p-value (выборка из {iters_cnt} биномиальных ztest'ов)", 
+                                 [f'при $H1$ и α = {alpha}, доля принятых $H1$ = {sensit_h1}', 
+                                  f'при $H0$ и α = {alpha}, доля принятых $H1$ = {sensit_h0}'])
+    for ax, ecdf, xy_ticks in zip([ax1, ax2], [ecdf_h1, ecdf_h0], [xy_ticks_h1, xy_ticks_h0]):
+        ax.plot(dots, ecdf(dots), linewidth = 2, color = 'k')
+        ax.set_xlabel('p-value', fontsize = 12)
+        ax.set_ylabel('доля выборки ниже значения по X', fontsize = 13)
+        ax.set(xlim = (-0.005, 1), ylim = (0, 1.01), xticks = [alpha] + xy_ticks, yticks = xy_ticks)
+        if max(xy_ticks) == 0.2:
+            # мультипликатор на 1.04 - чтобы не казалось, что график дошёл до единиц и закончился 
+            ax.set_xlim((0, 0.2 * 1.04))
+            ax.set_ylim((0, ecdf_h0(0.2) * 1.04))
+        ax.grid(b = True, axis = 'both')
+        
+    if save_name:
+        plt.savefig(save_name, bbox_inches = 'tight', pad_inches = 0)    
+    display(fig)
+    plt.close(fig)
+#%%
+def test_simulations(sample_a, sample_b, iters_cnt = 1500, alpha = 0.05, perform = None, save_name = None):
+    
+    if not perform:
+        print('Нужно передать список стат. критериев в параметре "perform"')
+        
+    cmap = plt.get_cmap('tab10', len(perform) + 1)
+        
+    a_mean = np.mean(sample_a)
+    a_std = np.std(sample_a)
+    a_num = len(sample_a)
+    
+    b_mean = np.mean(sample_b)
+    b_std = np.std(sample_b)
+    b_num = len(sample_b)
+    
+    sample_a = np.random.normal(loc = a_mean, scale = a_std, size = (iters_cnt, a_num))
+    sample_b_h1 = np.random.normal(loc = b_mean, scale = b_std, size = (iters_cnt, b_num))
+    sample_b_h0 = np.random.normal(loc = a_mean, scale = b_std, size = (iters_cnt, b_num))
+    
+    dots = np.linspace(0, 1, iters_cnt)
+    
+    sensits = [[], []]
+    curves = {}
+    def update_curves_dict(pvalues_h1, pvalues_h0, test_name):
+        ecdf_h1 = ECDF(pvalues_h1)
+        ecdf_h0 = ECDF(pvalues_h0)
+        sensit_h1 = ecdf_h1(alpha)
+        sensit_h0 = ecdf_h0(alpha)
+        upd_dict = {test_name: {'h1': ecdf_h1(dots), 'h0': ecdf_h0(dots), 
+                                'sensit': {'h1': '{:.3f}'.format(sensit_h1), 'h0': '{:.3f}'.format(sensit_h0)}}}
+        curves.update(upd_dict)
+        sensits[0].append(sensit_h0)
+        sensits[1].append(sensit_h1)
+        
+    
+    if 'ttest' in perform:
+        pvalues_ttest_h1 = list(map(lambda x: st.ttest_ind(x[0], x[1]).pvalue, zip(sample_a, sample_b_h1)))
+        pvalues_ttest_h0 = list(map(lambda x: st.ttest_ind(x[0], x[1]).pvalue, zip(sample_a, sample_b_h0)))
+        update_curves_dict(pvalues_ttest_h1, pvalues_ttest_h0, 'ttest')
+    
+    if 'mannwhitney' in perform:
+        pvalues_ttest_h1 = list(map(lambda x: st.mannwhitneyu(x[0], x[1], 
+                                                    alternative='two-sided').pvalue, zip(sample_a, sample_b_h1)))
+        pvalues_ttest_h0 = list(map(lambda x: st.mannwhitneyu(x[0], x[1], 
+                                                    alternative='two-sided').pvalue, zip(sample_a, sample_b_h0)))
+        update_curves_dict(pvalues_ttest_h1, pvalues_ttest_h0, 'mannwhitney')
+    
+    if 'bootstrap' in perform:
+        def bootstrap(x):
+            sample_a = x[0]
+            sample_b = x[1]
+            bootstraps_cnt = 500
+            bootstraps_size = max([len(sample_a), len(sample_b)])
+            boot_data = []
+            for i in range(bootstraps_cnt):
+                bootstrap_sample_a = np.random.choice(sample_a, bootstraps_size, replace = True)
+                bootstrap_sample_b = np.random.choice(sample_b, bootstraps_size, replace = True)
+                boot_data.append(np.mean(bootstrap_sample_a - bootstrap_sample_b))
+            pvalue_1 = norm.cdf(x = 0, loc = np.mean(boot_data), scale = np.std(boot_data))
+            pvalue_2 = norm.cdf(x = 0, loc = -np.mean(boot_data), scale = np.std(boot_data))
+            return min(pvalue_1, pvalue_2) * 2
+            
+            """
+            Мой пуассоновский бутстрап работает медленней, чем классический. Оставил, чтобы было, откуда продолжить
+            
+            bootstraps_cnt = 1000        
+            if len(x[0]) > len(x[1]):
+                sample_a = x[0]
+                sample_b = x[1]
+            else:
+                samlpe_a = x[1]
+                sample_b = x[0]
+            len_a = len(sample_a)
+            len_b = len(sample_b)
+        
+            # чтобы выборки были примерно равного размера, пуассоновское распределение для большей из них центрирую
+            # на единицу, а меньшей из них - на частном от деления размера большей выборки на размер меньшей
+            ratio = len_a / len_b
+            
+            # бустрап-выборок - 1000, в каждой по n мультипликаторов (для n наблюдений)
+            poisson_coefs_a = st.poisson(1).rvs((bootstraps_cnt, len_a))
+            poisson_coefs_b = st.poisson(ratio).rvs((bootstraps_cnt, len_b))
+            
+            # суммирую мультипикаторы и тысячу раз определяю, в какой бутстрап-выбороке из двух будет меньше элементов.
+            # фиксирую индекс последнего элемента в наименьшей выборке, буду этим индексом ограничивать обе выборки,
+            # чтобы одну можно было вычесть из другой поэлементно
+            constraints = np.amin([np.sum(poisson_coefs_a, axis = 1), np.sum(poisson_coefs_b, axis = 1)], axis = 0)
+            
+            # возвращаю среднюю разницу элементов каждой из тысячи пар бутстрап-выборок
+            bstrp = lambda x: np.mean(np.subtract(np.repeat(sample_a, x[0])[:x[2]], np.repeat(sample_b, x[1])[:x[2]]))
+            mean_diffs = list(map(bstrp, zip(poisson_coefs_a, poisson_coefs_b, constraints)))
+            
+            pvalue_1 = norm.cdf(x = 0, loc = np.mean(mean_diffs), scale = np.std(mean_diffs))
+            pvalue_2 = norm.cdf(x = 0, loc = -np.mean(mean_diffs), scale = np.std(mean_diffs))
+            return min(pvalue_1, pvalue_2) * 2
+            """
+        
+        pvalues_ttest_h1 = list(map(bootstrap, zip(sample_a, sample_b_h1)))
+        pvalues_ttest_h0 = list(map(bootstrap, zip(sample_a, sample_b_h0)))
+        update_curves_dict(pvalues_ttest_h1, pvalues_ttest_h0, 'bootstrap')
+    
+    
+    sensits = list(map('{:.3f}'.format, np.array([min(sensits[0]), max(sensits[0]), 
+                                                  min(sensits[1]), max(sensits[1])])))
+    if len(perform) == 1:
+        title = f"Кривая CDF для значений p-value (выборка из {iters_cnt} {perform[0]}'ов)"
+    else:
+        title = f"Кривая CDF для значений p-value нескольких тестов (по {iters_cnt} повторений каждого теста)"
+        
+        
+    fig, ax1, ax2 = two_subplots((18, 5), title, [f'при $H1$ и α = {alpha}', f'при $H0$ и α = {alpha}'])
+    for ax, hypo in zip([ax1, ax2], ['h1', 'h0']):               
+        for i, test in enumerate(curves.keys()):
+            label = (f"{test}, принятых $H1$: {curves[test]['sensit'][hypo]}")
+            ax.plot(dots, curves[test][hypo], linewidth = 2, color = cmap(i), label = label)
+                        
+        ax.set_xlabel('p-value', fontsize = 12)
+        ax.set_ylabel('доля выборки ниже значения по X', fontsize = 13)
+        ax.set(xlim = (-0.005, 1), ylim = (0, 1.01))
+        ax.grid(b = True, axis = 'both') 
+        ax.legend(loc = 'lower right', fontsize = 'large')
+    
+        
+    if save_name:
+        plt.savefig(save_name, bbox_inches = 'tight', pad_inches = 0)    
+    display(fig)
+    plt.close(fig)
+#%%
+def vary_sample_sizes(sample_a, sample_b, alpha = 0.05, sensitivity = 0.95, perform = None, 
+                      iters_cnt = 25, title = None, save_name = None):
+    from IPython import get_ipython
+    
+    if not perform:
+        print('Нужно передать список стат. критериев в параметре "perform ="')
+    
+    if not title:
+        title = f'Рост чувствительности при увеличении выборок, α = {alpha}\n(по {iters_cnt} тестов на точку)'
+    cmap = plt.get_cmap('tab10', len(perform) + 1)
+    
+    # у меня компьютер не сможет одновременно обсчитывать больше ста случайных выборок большого размера.
+    # поэтому разбиваем iters_cnt на целые сотни плюс остаток, будем считать по частям
+    if (iters_cnt % 100) != 0:
+        iters = np.repeat(100, (iters_cnt // 100) + 1)
+        iters[-1] = iters_cnt % 100
+    else:
+        iters = np.repeat(100, (iters_cnt // 100))
+    
+    sample_a = np.array(sample_a).reshape(-1)
+    sample_b = np.array(sample_b).reshape(-1)
+    a_mean = np.mean(sample_a)
+    a_std = np.std(sample_a)
+    a_num = len(sample_a)
+    b_mean = np.mean(sample_b)
+    b_std = np.std(sample_b)
+    b_num = len(sample_b)
+    
+    sd = abs(a_mean - b_mean)/np.std(np.concatenate([sample_a, sample_b]))
+    if a_num >= b_num:
+        biggest_by_now = a_num
+        ratio = b_num/a_num
+        A_is_bigger = True
+    else:
+        biggest_by_now = b_num
+        ratio = a_num/b_num
+        A_is_bigger = False
+    bigger_sample_num = tt_ind_solve_power(sd, alpha = alpha, power = sensitivity, 
+                                           ratio = ratio, alternative = 'two-sided')
+    if biggest_by_now >= bigger_sample_num:
+        print('Выборки уже достигли достаточных размеров, тестируй')
+    
+    sizes = np.linspace(biggest_by_now, bigger_sample_num, 10, dtype = 'int')
+    spread = bigger_sample_num - a_num
+
+    perform_dict, sensitivity_values = {}, {}
+    
+    if 'ttest' in perform:
+        func = lambda x: st.ttest_ind(x[0], x[1]).pvalue
+        perform_dict.update({'ttest': func})
+        sensitivity_values['ttest'] = {}
+        
+    if 'mannwhitney' in perform:
+        func = lambda x: st.mannwhitneyu(x[0], x[1], alternative='two-sided').pvalue
+        perform_dict.update({'mannwhitney': func})
+        sensitivity_values['mannwhitney'] = {}
+    
+    # т.к. считаем по частям, будем по ключу [size] постепенно прибавлять кол-во найденных различий
+    for statname in perform_dict.keys():
+        for size in sizes:
+            sensitivity_values[statname][size] = 0
+        
+    for iter_cnt in iters:
+        if A_is_bigger:
+            for size in sizes:
+                A = np.random.normal(loc = a_mean, scale = a_std, size = (iter_cnt, size))
+                B = np.random.normal(loc = b_mean, scale = b_std, size = (iter_cnt, int(size * ratio)))
+                for statname, stattest in perform_dict.items():
+                    pvalues_test = np.array(list(map(stattest, zip(A, B))))
+                    caught_h1 = len(pvalues_test[ pvalues_test < alpha ])
+                    sensitivity_values[statname][size] += caught_h1
+                del A
+                del B
+                gc.collect()
+        else:
+            for size in sizes:
+                A = np.random.normal(loc = a_mean, scale = a_std, size = (iter_cnt, size))
+                B = np.random.normal(loc = b_mean, scale = b_std, size = (iter_cnt, int(size * ratio)))
+                for statname, stattest in perform_dict.items():
+                    pvalues_test = np.array(list(map(stattest, zip(A, B))))
+                    caught_h1 = len(pvalues_test[ pvalues_test < alpha ])
+                    sensitivity_values[statname][size] += caught_h1
+                del A
+                del B
+                gc.collect()
+                        
+
+    fig, ax = plt.subplots(figsize = (14, 5))
+    ax.set_title(title, y = 1.1, fontsize = 16)
+    ax.set_xticks(sizes)
+    ax.set_xticklabels([int(x) for x in (sizes * ratio)], rotation = 45, ha = 'right', fontsize = 13) 
+    ax.set_ylabel('сколько истинных H1 удалось принять', fontsize = 13)
+    ax.set_xlabel('размер наименьшей из выборок', fontsize = 13)
+    ax.set_xlim(a_num - spread * 0.1, bigger_sample_num + spread * 0.1)
+    ax.grid(b = True, axis = 'both')
+    
+    for i, test_name in enumerate(perform_dict.keys()):
+        x, y = [], []
+        for size, successes in sensitivity_values[test_name].items():
+            x.append(size)
+            y.append(successes / iters_cnt)
+        ax.plot(x, y, linewidth = 2, color = cmap(i), label = test_name, marker = 'o', ms = 8, 
+                mfc = cmap(i), mec = '#f2f2f2', mew = 2)
+        
+    ax.legend(fontsize = 'x-large')
+    if save_name:
+        plt.savefig(save_name, bbox_inches = 'tight', pad_inches = 0) 
+    display(fig)
+    plt.close(fig)
 #%%
 #%%
 #%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+#%%
+        
 
 # ФИШКИ СПАЙДЕРА, КОНСОЛИ И КОМАНДНОЙ СТРОКИ
 """
