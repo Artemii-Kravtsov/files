@@ -2723,7 +2723,7 @@ def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>–ù–
                               'y1': len(continuous) - 0.5, 'yref': 'y', 'line_dash': 'dash', 'opacity': 0.15},
                              {'type': 'line', 'x0': 0, 'x1': 0, 'xref': 'x', 'y0': -0.5, 
                               'y1': len(continuous) - 0.5, 'yref': 'y', 'line_width': 4, 'opacity': 0.15}],
-                   height = ax_height, template = 'ggplot2', xaxis = dict(tickmode = 'array', tickvals = xticks, 
+                   height = ax_height, template = 'simple_white', xaxis = dict(tickmode = 'array', tickvals = xticks, 
                    ticktext = xticklabels, range = (xlim_plus[0], xlim_plus[1])), yaxis = dict(tickmode = 'array', 
                    tickvals = yticks, ticktext = continuous, range = (-0.5, len(continuous)-0.5)), boxmode = 'group',
                    legend = dict(font_size = 13), title = dict(font_size = 16, y = 1, pad = {'b': 20}, 
@@ -3401,6 +3401,7 @@ def time_series(df, date_col, period = 'hours', title = '', ax = None, fontsize 
     
 #%%
 def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha = 0.05, save_name = None):
+    import numpy as np
     from statsmodels.stats.proportion import proportions_ztest
     
     sample_a = np.random.binomial(trials1, c1, iters_cnt)
