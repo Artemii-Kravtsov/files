@@ -600,16 +600,33 @@ def customizing_intervals(interval, dtype = '', decimals = 0, parenthesis = Fals
     else:
         interval = str(interval)
         left, right = interval.split(', ')
+        
         if len(left.split(' ')) == 2:
             left_date, left_time = left.split(' ')
             left_date = left_date[1:]
+            left_time = left_time.split(':')
+            for i in range(len(left_time)):
+                left_time[i] = left_time[i][:2]
+            left_time = ':'.join(left_time)
         else:
             left_date = left
+            left_time = ''
+            
         if len(right.split(' ')) == 2:
             right_date, right_time = right.split(' ')
+            right_time = right_time[:-1]
+            right_time = right_time.split(':')
+            for i in range(len(right_time)):
+                right_time[i] = right_time[i][:2]
+            right_time = ':'.join(right_time)
         else:
             right_date = right
-        return ''.join([left_date, ' / ', right_date])
+            right_time = ''
+            
+        if left_date == right_date:
+            return ' '.join([left_date + ',', left_time, '—', right_time])
+        else:
+            return ' '.join([left_date, left_time, '—', right_date, right_time])
 #%%
 def outliers_investigation(df, include = '', top_whisker = 1.5, bot_whisker = 1.5,
                            exclude = '', exclude_cat = '', zero = -909090, unknown = -777777):
@@ -1973,11 +1990,11 @@ def my_plotly_config(zoom = False, display_bar = True, updates = None):
 def two_subplots(figsize, suptitle, titles):
     import matplotlib.pyplot as plt
     fig = plt.figure(figsize = figsize)
-    fig.suptitle(suptitle, fontsize = 18, y = 1.15)
+    fig.suptitle(suptitle, fontsize = 16, y = 1.15)
     grid = fig.add_gridspec(1, 2, wspace = 0.25)
     ax1 = fig.add_subplot(grid[0, 0]); ax2 = fig.add_subplot(grid[0, 1])
     for ax, title in zip([ax1, ax2], titles):
-        ax.set_title(title, y = 1.05, fontsize = 15)
+        ax.set_title(title, y = 1.05, fontsize = 14)
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
     return fig, ax1, ax2
@@ -1992,7 +2009,7 @@ def my_display(df, index_name = None, col_names = None):
         df.columns = col_names
     display(df)
 #%%
-def ztest_conversion(daily, date_col, group_col, users_cum_col, clients_cum_col, mapper, figsize, 
+def ztest_conversion(daily, timestamp_col, group_col, marker_trials, marker_successes, mapper, figsize, 
                   return_fig = False, alpha = 0.05, legend = ['A', 'B'],
                   title_left = 'Накопительная конверсия', title = None, save_name = None):
     import scipy.stats as st
@@ -2020,11 +2037,11 @@ def ztest_conversion(daily, date_col, group_col, users_cum_col, clients_cum_col,
         ax.grid(b = True, axis = 'y')
         
     daily = daily.copy()
-    daily['Conversion'] = daily[clients_cum_col].div(daily[users_cum_col])
+    daily['Conversion'] = daily[marker_successes].div(daily[marker_trials])
     conv_col = 'Conversion'
     
     fig, ax1, ax2 = two_subplots(figsize, [title_left, 'Разница между группами'])
-    xticks = np.arange(1, daily[date_col].drop_duplicates().shape[0] + 1) 
+    xticks = np.arange(1, daily[timestamp_col].drop_duplicates().shape[0] + 1) 
 
     for group, color, legend in zip(['A', 'B'], ['#9a0200', '#789b73'], legend):
         data_sliced = daily[ daily[group_col] == mapper[group] ]
@@ -2032,8 +2049,12 @@ def ztest_conversion(daily, date_col, group_col, users_cum_col, clients_cum_col,
                  color = color, linewidth = 2.5)
     customize_ax(ax1, 'накопительная конверсия, %', xticks, figsize)
     
-    final_conv_a = daily[ daily[group_col] == mapper['A']  ][conv_col].max()
-    final_conv_b = daily[ daily[group_col] == mapper['B']  ][conv_col].max()
+    final_conv_a = daily[ daily[group_col] == mapper['A']  ][timestamp_col].max()
+    final_conv_a = (daily[ (daily[group_col] == mapper['A']) &  (daily[timestamp_col] == final_conv_a) ]
+                                                                    [conv_col].values[0])
+    final_conv_b = daily[ daily[group_col] == mapper['B']  ][timestamp_col].max()
+    final_conv_b = (daily[ (daily[group_col] == mapper['B']) &  (daily[timestamp_col] == final_conv_b) ]
+                                                                    [conv_col].values[0])
     
     if final_conv_a > final_conv_b:
         ax1.vlines(xticks, ax1.get_ylim()[0], 
@@ -2051,10 +2072,10 @@ def ztest_conversion(daily, date_col, group_col, users_cum_col, clients_cum_col,
     at_least_one_h1_005 = False
     at_least_one_h1_001 = False
     
-    for xtick, date in enumerate(daily[date_col].drop_duplicates(), 1):
-        samp_date = daily[ (daily[date_col] == date) ]
-        a_buy = samp_date.loc[ (samp_date[group_col] == mapper['A']) ][clients_cum_col].values[0]
-        b_buy = samp_date.loc[ (samp_date[group_col] == mapper['B']) ][clients_cum_col].values[0]
+    for xtick, date in enumerate(daily[timestamp_col].drop_duplicates(), 1):
+        samp_date = daily[ (daily[timestamp_col] == date) ]
+        a_buy = samp_date.loc[ (samp_date[group_col] == mapper['A']) ][marker_successes].values[0]
+        b_buy = samp_date.loc[ (samp_date[group_col] == mapper['B']) ][marker_successes].values[0]
         a_vis = a_buy / (samp_date.loc[ (samp_date[group_col] == mapper['A']) ][conv_col].values[0])
         b_vis = b_buy / (samp_date.loc[ (samp_date[group_col] == mapper['B']) ][conv_col].values[0])
         P = (a_buy + b_buy) / (a_vis + b_vis)
@@ -3209,6 +3230,11 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '', bins = 2
             nuniq = df[col].nunique()
             if nuniq == 2:
                 coltypes['binary'].append(col)
+            elif 'datetime' in df[col].dtype.name:
+                df[f'{col}_cut{bins}'] = pd.cut(df[col], bins, include_lowest = True)
+                df[f'{col}_cut{bins}'] = df[f'{col}_cut{bins}'].apply(customizing_intervals, 
+                                                                      args = ('datetime', 0, True))
+                coltypes['discrete'].append(f'{col}_cut{bins}')
             elif nuniq <= 70:
                 if nuniq == 3:
                     three.append(col)
@@ -3256,6 +3282,12 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '', bins = 2
                 df[f'{col}_cut{bins}'] = pd.cut(df[col], bins, include_lowest = True)
                 df[f'{col}_cut{bins}'] = df[f'{col}_cut{bins}'].apply(customizing_intervals, 
                                                                       args = ('numeric', dec, True))
+                discrete_vars.append(f'{col}_cut{bins}')
+                discrete_vars.remove(col)
+            elif 'datetime' in df[col].dtype.name:
+                df[f'{col}_cut{bins}'] = pd.cut(df[col], bins, include_lowest = True)
+                df[f'{col}_cut{bins}'] = df[f'{col}_cut{bins}'].apply(customizing_intervals, 
+                                                                      args = ('datetime', 0, True))
                 discrete_vars.append(f'{col}_cut{bins}')
                 discrete_vars.remove(col)
     else:
@@ -3362,32 +3394,64 @@ class color:
     UNDERLINE = '\033[4m'
     END = '\033[0m'
 #%%
-def time_series(df, date_col, period = 'hours', title = '', ax = None, fontsize = 18, xlabels_sizes = 13):
+def time_series(df, date_col, period = 'hours', title = '', ax = None, fontsize = 18, xlabels_sizes = 13, grouper = None, height = 3.5):
     import pandas as pd
     import numpy as np 
     import matplotlib.pyplot as plt
     if period == 'hours':
-        aux = (df[date_col].astype('datetime64[h]').value_counts().sort_index()
-               .reset_index().rename({'index': 'targ'}, axis=1))
-        first_index_for_every_day = aux['targ'].astype('datetime64[D]').reset_index().groupby('targ')['index'].first()
-        xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
         if not ax:
-            fig, ax = plt.subplots(figsize = (18, 3))
-        ax.plot(aux.targ, aux[date_col], linewidth = 2, color = '#789b73')
-        ax.set(xticks = xticks.targ_y, xlim = (aux.targ.min(), aux.targ.max()))
+            fig, ax = plt.subplots(figsize = (18, height))
+
+        if not grouper:
+            aux = (df[date_col].astype('datetime64[h]').value_counts().sort_index()
+                   .reset_index().rename({'index': 'targ'}, axis=1))
+            first_index_for_every_day = aux['targ'].astype('datetime64[D]').reset_index().groupby('targ')['index'].first()
+            xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
+            ax.plot(aux.targ, aux[date_col], linewidth = 2, color = '#789b73')
+        else:
+            uniques = df[grouper].unique()
+            cmap = plt.get_cmap('Paired', len(uniques))
+            aux = (df[date_col].astype('datetime64[h]').value_counts().sort_index().reset_index()
+                   .rename({'index': 'targ'}, axis=1))
+            first_index_for_every_day = (aux['targ'].astype('datetime64[D]').reset_index()
+                                                        .groupby('targ')['index'].first())
+            xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
+            for i, un in enumerate(uniques):
+                aux = (df.loc[ df[grouper] == un, date_col].astype('datetime64[h]').value_counts().sort_index()
+                                                           .reset_index().rename({'index': 'targ'}, axis=1))
+                ax.plot(aux.targ, aux[date_col], linewidth = 2, color = cmap(i), label = un)
+            ax.legend(fontsize = 'x-large')
+        
+        ax.set(xticks = xticks.targ_y, xlim = (xticks.targ_y.min(), xticks.targ_y.max()))
         ax.set_ylabel('кол-во наблюдений', fontsize = 12)
         ax.set_title(title, fontsize = fontsize, y = 1.05)
         ax.set_xticklabels(xticks.targ_y.dt.strftime('%d %h, %H:00'), rotation = 45, fontsize = xlabels_sizes, ha = 'right')
         ax.grid(b = True, axis = 'x')
     
     if period == 'days':
-        aux = (df[date_col].astype('datetime64[D]').value_counts().sort_index()
-               .reset_index().rename({'index': 'targ'}, axis=1))
-        first_index_for_every_day = aux['targ'].astype('datetime64[M]').reset_index().groupby('targ')['index'].first()
-        xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
         if not ax:
-            fig, ax = plt.subplots(figsize = (18, 3))
-        ax.plot(aux.targ, aux[date_col], linewidth = 2, color = '#789b73')
+            fig, ax = plt.subplots(figsize = (18, height))
+        if not grouper:
+            aux = (df[date_col].astype('datetime64[D]').value_counts().sort_index()
+                               .reset_index().rename({'index': 'targ'}, axis=1))
+            first_index_for_every_day = (aux['targ'].astype('datetime64[M]').reset_index()
+                                         .groupby('targ')['index'].first())
+            xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
+            ax.plot(aux.targ, aux[date_col], linewidth = 2, color = '#789b73')
+        else:
+            uniques = df[grouper].unique()
+            cmap = plt.get_cmap('Paired', len(uniques))
+            aux = (df[date_col].astype('datetime64[D]').value_counts().sort_index().reset_index()
+                   .rename({'index': 'targ'}, axis=1))
+            first_index_for_every_day = (aux['targ'].astype('datetime64[M]').reset_index()
+                                                        .groupby('targ')['index'].first())
+            xticks = first_index_for_every_day.reset_index().merge(aux.reset_index(), on = 'index')
+            for i, un in enumerate(uniques):
+                aux = (df.loc[ df[grouper] == un, date_col].astype('datetime64[D]').value_counts().sort_index()
+                                                           .reset_index().rename({'index': 'targ'}, axis=1))
+                ax.plot(aux.targ, aux[date_col], linewidth = 2, color = cmap(i), label = un)
+            ax.legend(fontsize = 'x-large')
+            
         ax.set(xticks = xticks.targ_y, xlim = (aux.targ.min(), aux.targ.max()))
         ax.set_ylabel('кол-во наблюдений', fontsize = 12)
         ax.set_title(title, fontsize = fontsize, y = 1.05)
@@ -3400,9 +3464,14 @@ def time_series(df, date_col, period = 'hours', title = '', ax = None, fontsize 
         plt.close(fig)
     
 #%%
-def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha = 0.05, save_name = None):
+def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha = 0.05, 
+                              save_name = None, figsize = (15, 5), vary_sizes = False,
+                              vary_iters_cnt = 500):
     import numpy as np
     from statsmodels.stats.proportion import proportions_ztest
+    from statsmodels.distributions.empirical_distribution import ECDF
+    import matplotlib.pyplot as plt
+    import scipy.stats as st
     
     sample_a = np.random.binomial(trials1, c1, iters_cnt)
     sample_b_h1 = np.random.binomial(trials2, c2, iters_cnt)
@@ -3426,7 +3495,7 @@ def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha 
     xy_ticks_h1 = [alpha] + list(np.arange(0.2, 1.1, 0.2))
     xy_ticks_h0 = [0.01] + list(np.arange(0.05, 0.21, 0.05))
     
-    fig, ax1, ax2 = two_subplots((15, 5), 
+    fig, ax1, ax2 = two_subplots(figsize, 
                                  f"Кривая CDF для значений p-value (выборка из {iters_cnt} биномиальных ztest'ов)", 
                                  [f'при $H1$ и α = {alpha}, доля принятых $H1$ = {sensit_h1}', 
                                   f'при $H0$ и α = {alpha}, доля принятых $H1$ = {sensit_h0}'])
@@ -3445,6 +3514,64 @@ def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha 
         plt.savefig(save_name, bbox_inches = 'tight', pad_inches = 0)    
     display(fig)
     plt.close(fig)
+    
+    if vary_sizes == True:
+        def get_size(theta_c, theta_t, alpha, beta):
+            t_alpha = st.norm.ppf(1 - alpha, loc = 0, scale = 1)
+            t_beta = st.norm.ppf(beta, loc = 0, scale = 1)
+            n = t_alpha * np.sqrt(theta_t * (1 - theta_t))
+            n -= t_beta * np.sqrt(theta_c * (1 - theta_c))
+            n /= theta_c - theta_t
+            return int(np.ceil(n ** 2))
+        min_sample_size = get_size(c1, c2, alpha, 0.05) * 1.8
+        
+        if trials1 > trials2:
+            max_sample_size = min_sample_size * (1 + (trials2 / trials1))
+            smallest_by_now, biggest_by_now, conv_sm, conv_bg = trials2, trials1, c2, c1
+        else:
+            smallest_by_now, biggest_by_now, conv_sm, conv_bg = trials1, trials2, c1, c2
+            max_sample_size = min_sample_size * (1 + (trials1 / trials2))
+        
+        if smallest_by_now >= min_sample_size:
+            print('Выборки уже достигли нужных размеров, тестируй')
+            return
+        
+        sizes_sm = np.linspace(smallest_by_now, min_sample_size, 18, dtype = 'int')
+        sizes_bg = np.linspace(biggest_by_now, max_sample_size, 18, dtype = 'int')
+        spread = min_sample_size - smallest_by_now
+        
+        perform_dict, sensitivity_values = {}, {}
+        sensitivity_values['z-test'] = {}
+        for size_sm, size_bg in zip(sizes_sm, sizes_bg):
+            sensitivity_values['z-test'][size_sm] = 0
+            A = np.random.binomial(size_sm, conv_sm, vary_iters_cnt)
+            B = np.random.binomial(size_bg, conv_bg, vary_iters_cnt)
+            stattest = lambda x: proportions_ztest([x[0], x[1]], [size_sm, size_bg])[1]
+            pvalues_test = np.array(list(map(stattest, zip(A, B))))
+            caught_h1 = len(pvalues_test[ pvalues_test < alpha ])
+            sensitivity_values['z-test'][size_sm] = caught_h1 / vary_iters_cnt      
+        
+        title = f'Изменение чувствительности при увеличении размера выборок, α = {alpha}'
+        fig, ax = plt.subplots(figsize = figsize)
+        ax.set_title(title, y = 1.1, fontsize = 16)
+        ax.set_xticks(sizes_sm)
+        ax.set_xticklabels(sizes_sm, rotation = 45, ha = 'right', fontsize = 13) 
+        ax.set_ylabel('сколько истинных H1 удалось принять', fontsize = 13)
+        ax.set_xlabel(f'размер наименьшей из выборок, по {vary_iters_cnt} тестов на точку', fontsize = 13)
+        ax.set_xlim(smallest_by_now - spread * 0.1, min_sample_size + spread * 0.1)
+        ax.grid(b = True, axis = 'both')
+
+        x, y = [], []
+        for size, successes in sensitivity_values['z-test'].items():
+            x.append(size)
+            y.append(successes)
+        ax.plot(x, y, linewidth = 2, color = 'black', label = 'Биномиальный z-test', marker = 'o', ms = 7, 
+                mfc = 'black', mec = 'white', mew = 2)
+        
+        ax.legend(fontsize = 'x-large')
+        print()
+        display(fig)
+        plt.close(fig)
 #%%
 def test_simulations(sample_a, sample_b, iters_cnt = 1500, alpha = 0.05, perform = None, save_name = None):
     
@@ -3684,7 +3811,114 @@ def vary_sample_sizes(sample_a, sample_b, alpha = 0.05, sensitivity = 0.95, perf
     display(fig)
     plt.close(fig)
 #%%
+def all_events_conversion(df, event_names_col, group_col, id_col, alpha = 0.05, dec = 3):
+    import pandas as pd
+    import numpy as np 
+    from statsmodels.stats.proportion import proportions_ztest
+    from statsmodels.stats.multitest import multipletests
+    from itertools import combinations
+    from IPython.display import display
+    
+    track_conv = pd.DataFrame()
+    track_uids = lambda uids_list: success_event_slice[ success_event_slice.id.isin(uids_list) ]['id'].nunique()
+    event_names = df[event_names_col].unique()
+    group_names = df[group_col].unique()
+
+    for (event_1, event_2) in combinations(event_names, 2):
+        # uids_ev_1 = df[ df[event_names_col] == event_1 ]['id'].nunique()
+        # uids_ev_2 = df[ df[event_names_col] == event_2 ]['id'].nunique()
+        # до этого trials было тех событием, на котором больше пользователей.
+        # теперь каждое событие из пары выступает и в роли trials, и в роли successees
+        trial_event = event_1
+        success_event = event_2
+        success_event_slice = df[ df[event_names_col] == success_event ]
+        b_ev_grouped = (df[ df[event_names_col] == trial_event ].groupby(group_col)
+                        .agg({id_col: ['nunique', 'unique']}).reset_index())
+        b_ev_grouped.columns = ['group', 'uids_cnt', 'uids']
+        b_ev_grouped['converted_uids_cnt'] = b_ev_grouped['uids'].apply(track_uids)
+        b_ev_grouped['track_conv'] = ' → '.join([trial_event, success_event])
+        track_conv = pd.concat([track_conv, b_ev_grouped.iloc[:, [-1, 0, 1, 3]]])
+        track_conv['Конверсия'] = (track_conv['converted_uids_cnt'] / track_conv['uids_cnt'])
+        
+        
+        trial_event = event_2
+        success_event = event_1
+        success_event_slice = df[ df[event_names_col] == success_event ]
+        b_ev_grouped = (df[ df[event_names_col] == trial_event ].groupby(group_col)
+                        .agg({id_col: ['nunique', 'unique']}).reset_index())
+        b_ev_grouped.columns = ['group', 'uids_cnt', 'uids']
+        b_ev_grouped['converted_uids_cnt'] = b_ev_grouped['uids'].apply(track_uids)
+        b_ev_grouped['track_conv'] = ' → '.join([trial_event, success_event])
+        track_conv = pd.concat([track_conv, b_ev_grouped.iloc[:, [-1, 0, 1, 3]]])
+        track_conv['Конверсия'] = (track_conv['converted_uids_cnt'] / track_conv['uids_cnt'])
+
+
+    def z_tests_proportions(row, group_names = group_names):
+        tests = {}
+        combs = combinations(group_names, 2)
+        for (group_a, group_b) in [np.sort(c) for c in combs]:
+            a_successes = row['converted_uids_cnt'][group_a]
+            b_successes = row['converted_uids_cnt'][group_b]
+            a_trials = row['uids_cnt'][group_a]
+            b_trials = row['uids_cnt'][group_b]
+            diff = (b_successes / b_trials) - (a_successes / a_trials)
+            if diff == 0:
+                tests.update({'/'.join([str(group_a), str(group_b)]): [diff, 1]})
+            else:
+                stat, pval = proportions_ztest([a_successes, b_successes], [a_trials, b_trials])
+                tests.update({'/'.join([str(group_a), str(group_b)]): [diff, pval]})
+        return tests
+
+    track_conv = track_conv.pivot_table(columns = 'group', index = 'track_conv')
+    track_conv['tests'] = track_conv.apply(z_tests_proportions, axis = 1)
+    all_cols = ['Конверсия']
+    for groups_pair in track_conv['tests'].iloc[0].keys():
+        track_conv[groups_pair + ', разница'] = track_conv['tests'].apply(lambda x: x[groups_pair][0])
+        track_conv[groups_pair + ', z-test p-value (с поправкой Холма-Шидака)'] = (track_conv['tests']
+                                                                    .apply(lambda x: x[groups_pair][1]))
+        all_cols.extend([groups_pair + ', разница', groups_pair + ', z-test p-value (с поправкой Холма-Шидака)'])
+
+
+    track_conv.columns.names = [None, None]
+    track_conv.index.names = [None]
+    all_pv, all_oth = [], []
+    [all_oth.append(col) if 'z-test p-value' not in col else all_pv.append(col) for col in all_cols]
+    track_conv = track_conv[all_cols]
+    track_conv[all_oth] = track_conv[all_oth].round(dec).values.astype('str')
+
+    holm_sidak_pvalues = multipletests(track_conv[all_pv].values.flatten(), method = 'holm-sidak')[1]
+    track_conv.loc[:, all_pv] = [ holm_sidak_pvalues[i : i + len(all_pv)] for i in np.arange(0, len(holm_sidak_pvalues), len(all_pv)) ]
+
+    if len(all_pv) == 1:
+        func = (lambda x: ['background-color: #c7fdb5'] * len(x.index) if (x[all_pv][0] < alpha)
+                else ([''] * len(x.index)))
+        display(track_conv.style.apply(func, axis = 1))
+    else:
+        display(track_conv)
 #%%
+def cum_conversion_table(df, markers_col, marker_trials, marker_successes,
+                         group_col, id_col, timestamp_col, unit = 'day'):
+    import pandas as pd
+    
+    date_letter = {'hour': 'h', 'day': 'D', 'month': 'M', 'week': 'W'}
+    df[group_col] = df[group_col].astype('object')
+    df[unit] = df[timestamp_col].astype(f'datetime64[{date_letter[unit]}]')
+    trials_slice = df.query(f'{markers_col} == "{marker_trials}"')
+    succes_slice = df.query(f'{markers_col} == "{marker_successes}"')
+
+    daily = trials_slice.groupby([unit, group_col])[id_col].first().reset_index().rename({id_col: 'dropit',
+                                                                                          group_col: 'group',
+                                                                                          unit: 'date'}, axis = 1)
+    daily = daily.drop(['dropit'], axis = 1)
+    calc_cum_trials = (lambda row: trials_slice[ (trials_slice[unit] <= row["date"]) & 
+                                                 (trials_slice[group_col] == row["group"]) ][id_col].nunique())
+    calc_cum_succes = (lambda row: succes_slice[ (succes_slice[unit] <= row["date"]) & 
+                                                 (succes_slice[group_col] == row["group"]) ][id_col].nunique())
+
+    daily['trials_cum'] = daily.apply(calc_cum_trials, axis = 1)
+    daily['successes_cum'] = daily.apply(calc_cum_succes, axis = 1)
+    daily['conversion_cum'] = daily.successes_cum.div(daily.trials_cum)
+    return daily.sort_values(by = ['group', 'date'])
 #%%
 #%%
 #%%
