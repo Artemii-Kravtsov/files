@@ -2618,7 +2618,7 @@ def col_types(df):
             coltypes['continuous'].append(col)
     return dict(coltypes)
 #%%
-def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>Непрерывные переменные</b>', display_graph = True):
+def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, continuous_colnames, title = '<b>Непрерывные переменные</b>', display_graph = True):
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2746,7 +2746,8 @@ def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>Н�
                               'y1': len(continuous) - 0.5, 'yref': 'y', 'line_width': 4, 'opacity': 0.15}],
                    height = ax_height, template = 'simple_white', xaxis = dict(tickmode = 'array', tickvals = xticks, 
                    ticktext = xticklabels, range = (xlim_plus[0], xlim_plus[1])), yaxis = dict(tickmode = 'array', 
-                   tickvals = yticks, ticktext = continuous, range = (-0.5, len(continuous)-0.5)), boxmode = 'group',
+                   tickvals = yticks, ticktext = [continuous_colnames[col] for col in continuous], 
+                   range = (-0.5, len(continuous)-0.5)), boxmode = 'group',
                    legend = dict(font_size = 13), title = dict(font_size = 16, y = 1, pad = {'b': 20}, 
                    text = title, x = 0.5, yanchor = 'bottom', xanchor = 'center', xref = 'paper', yref = 'paper'),
                    margin = dict(l = 0, r = 0, t = 60, b = 0))
@@ -2787,8 +2788,8 @@ def fgd_in_continuous_vars(df, grouper, groups, continuous_vars, title = '<b>Н�
     else:
         return objects_cont, kw_cont
 #%%
-def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Прерывистые переменные</b>', 
-                         display_graph = True):
+def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, discrete_colnames, 
+                         title = '<b>Прерывистые переменные</b>', display_graph = True):
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
@@ -2800,6 +2801,7 @@ def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Пре�
     groups_num = len(groups)
     df = df[ df[grouper].isin(groups) ]
     discrete = discrete_vars
+    discrete_titles = [discrete_colnames[col] for col in discrete]
     df_discrete = df[discrete + [grouper]]
     df_discrete = df_discrete.copy()
     groups_cnt = df[grouper].value_counts()
@@ -2810,8 +2812,8 @@ def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Пре�
 
     # создание осей, по две оси в ряду. их либо ровно сколько нужно, либо на одну больше - но к лишней 
     # заголовка не будет
-    fig = make_subplots(rows = nrows, cols = 2, subplot_titles = discrete, horizontal_spacing = 0.07, 
-                        vertical_spacing = 0.3 / nrows)
+    fig = make_subplots(rows = nrows, cols = 2, subplot_titles = discrete_titles, 
+                        horizontal_spacing = 0.07, vertical_spacing = 0.3 / nrows)
 
     # координаты всех осей. возможно, одна лишняя, но если так, то внутри zip она просто будет проигнорирована
     row_coords = np.sort(np.concatenate([np.arange(1, nrows + 1), np.arange(1, nrows + 1)]))
@@ -2940,7 +2942,7 @@ def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, title = '<b>Пре�
     else:
         return fig.data, fig.layout
 #%%
-def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинарные переменные</b>', display_graph = True):
+def fgd_in_binary_vars(df, grouper, groups, binary_vars, binary_colnames, title = '<b>Бинарные переменные</b>', display_graph = True):
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
@@ -3034,7 +3036,7 @@ def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинар�
                 yticks_for_bars.append(counter)
                 counter += 1
             yticks_for_colnames.append(np.mean(temp))
-            yticklabels.append(col)
+            yticklabels.append(binary_colnames[col])
 
         # рассчитываем ylim и высоту графика
         ylim = (1 - y_shift, np.max(yticks_for_bars) + y_shift )
@@ -3194,7 +3196,8 @@ def fgd_in_binary_vars(df, grouper, groups, binary_vars, title = '<b>Бинар�
             return fig.data, fig.layout
 #%%
 def few_groups_distribution(df, grouper, vars_type = 'all', title = '', bins = 25,
-                            groups = None, continuous_vars = None, discrete_vars = None, binary_vars = None):
+                            groups = None, continuous_vars = None, discrete_vars = None, binary_vars = None,
+                            discrete_colnames = None, binary_colnames = None, continuous_colnames = None):
     import pandas as pd
     import numpy as np
     from plotly import graph_objs as go
@@ -3295,13 +3298,29 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '', bins = 2
     if not binary_vars:
         binary_vars = coltypes.get('binary')
         
+    if binary_vars and binary_colnames:
+        binary_colnames = dict(zip(binary_vars, binary_colnames))
+    elif binary_vars:
+        binary_colnames = dict(zip(binary_vars, binary_vars))
+        
+    if discrete_vars and discrete_colnames:
+        discrete_colnames = dict(zip(discrete_vars, discrete_colnames))
+    elif discrete_vars:
+        discrete_colnames = dict(zip(discrete_vars, discrete_vars))
+        
+    if continuous_vars and continuous_colnames:
+        continuous_colnames = dict(zip(continuous_vars, continuous_colnames))
+    elif continuous_vars:
+        continuous_colnames = dict(zip(continuous_vars, continuous_vars))
+    
+        
     # развилка, четыре варианта
     if vars_type == 'continuous':
-        fgd_in_continuous_vars(df, grouper, groups = groups, title = title, continuous_vars = continuous_vars)
+        fgd_in_continuous_vars(df, grouper, groups = groups, title = title, continuous_vars = continuous_vars, continuous_colnames = continuous_colnames)
     elif vars_type == 'discrete':
-        fgd_in_discrete_vars(df, grouper, groups = groups, title = title, discrete_vars = discrete_vars)
+        fgd_in_discrete_vars(df, grouper, groups = groups, title = title, discrete_vars = discrete_vars, discrete_colnames = discrete_colnames)
     elif vars_type == 'binary':
-        fgd_in_binary_vars(df, grouper, groups = groups, title = title, binary_vars = binary_vars)
+        fgd_in_binary_vars(df, grouper, groups = groups, title = title, binary_vars = binary_vars, binary_colnames = binary_colnames)
     elif vars_type == 'all':
         
         # проверка того, есть ли переменные всех типов для параметра 'all'
@@ -3313,11 +3332,11 @@ def few_groups_distribution(df, grouper, vars_type = 'all', title = '', bins = 2
             return
         
         # строю и возвращаю графики
-        obj_c, layout_c = fgd_in_continuous_vars(df, grouper, groups = groups, continuous_vars = continuous_vars, 
+        obj_c, layout_c = fgd_in_continuous_vars(df, grouper, groups = groups, continuous_vars = continuous_vars, continuous_colnames = continuous_colnames, 
                                display_graph = False)
-        obj_d, layout_d = fgd_in_discrete_vars(df, grouper, groups = groups, discrete_vars = discrete_vars,
+        obj_d, layout_d = fgd_in_discrete_vars(df, grouper, groups = groups, discrete_vars = discrete_vars, discrete_colnames = discrete_colnames,
                              display_graph = False)
-        obj_b, layout_b = fgd_in_binary_vars(df, grouper, groups = groups, binary_vars = binary_vars,
+        obj_b, layout_b = fgd_in_binary_vars(df, grouper, groups = groups, binary_vars = binary_vars, binary_colnames = binary_colnames,
                              display_graph = False, title = f'{title}<br><br><br>Бинарные переменные')
         
         # переписываю margin и title
@@ -3834,11 +3853,11 @@ def all_events_conversion(df, event_names_col, group_col, id_col, alpha = 0.05, 
         success_event_slice = df[ df[event_names_col] == success_event ]
         b_ev_grouped = (df[ df[event_names_col] == trial_event ].groupby(group_col)
                         .agg({id_col: ['nunique', 'unique']}).reset_index())
-        b_ev_grouped.columns = ['group', 'uids_cnt', 'uids']
+        b_ev_grouped.columns = ['group', 'Размер выборок', 'uids']
         b_ev_grouped['converted_uids_cnt'] = b_ev_grouped['uids'].apply(track_uids)
         b_ev_grouped['track_conv'] = ' → '.join([trial_event, success_event])
         track_conv = pd.concat([track_conv, b_ev_grouped.iloc[:, [-1, 0, 1, 3]]])
-        track_conv['Конверсия'] = (track_conv['converted_uids_cnt'] / track_conv['uids_cnt'])
+        track_conv['Конверсия'] = (track_conv['converted_uids_cnt'] / track_conv['Размер выборок'])
         
         
         trial_event = event_2
@@ -3846,11 +3865,11 @@ def all_events_conversion(df, event_names_col, group_col, id_col, alpha = 0.05, 
         success_event_slice = df[ df[event_names_col] == success_event ]
         b_ev_grouped = (df[ df[event_names_col] == trial_event ].groupby(group_col)
                         .agg({id_col: ['nunique', 'unique']}).reset_index())
-        b_ev_grouped.columns = ['group', 'uids_cnt', 'uids']
+        b_ev_grouped.columns = ['group', 'Размер выборок', 'uids']
         b_ev_grouped['converted_uids_cnt'] = b_ev_grouped['uids'].apply(track_uids)
         b_ev_grouped['track_conv'] = ' → '.join([trial_event, success_event])
         track_conv = pd.concat([track_conv, b_ev_grouped.iloc[:, [-1, 0, 1, 3]]])
-        track_conv['Конверсия'] = (track_conv['converted_uids_cnt'] / track_conv['uids_cnt'])
+        track_conv['Конверсия'] = (track_conv['converted_uids_cnt'] / track_conv['Размер выборок'])
 
 
     def z_tests_proportions(row, group_names = group_names):
@@ -3859,8 +3878,8 @@ def all_events_conversion(df, event_names_col, group_col, id_col, alpha = 0.05, 
         for (group_a, group_b) in [np.sort(c) for c in combs]:
             a_successes = row['converted_uids_cnt'][group_a]
             b_successes = row['converted_uids_cnt'][group_b]
-            a_trials = row['uids_cnt'][group_a]
-            b_trials = row['uids_cnt'][group_b]
+            a_trials = row['Размер выборок'][group_a]
+            b_trials = row['Размер выборок'][group_b]
             diff = (b_successes / b_trials) - (a_successes / a_trials)
             if diff == 0:
                 tests.update({'/'.join([str(group_a), str(group_b)]): [diff, 1]})
@@ -3871,7 +3890,7 @@ def all_events_conversion(df, event_names_col, group_col, id_col, alpha = 0.05, 
 
     track_conv = track_conv.pivot_table(columns = 'group', index = 'track_conv')
     track_conv['tests'] = track_conv.apply(z_tests_proportions, axis = 1)
-    all_cols = ['Конверсия']
+    all_cols = ['Размер выборок', 'Конверсия']
     for groups_pair in track_conv['tests'].iloc[0].keys():
         track_conv[groups_pair + ', разница'] = track_conv['tests'].apply(lambda x: x[groups_pair][0])
         track_conv[groups_pair + ', z-test p-value (с поправкой Холма-Шидака)'] = (track_conv['tests']
@@ -3883,6 +3902,8 @@ def all_events_conversion(df, event_names_col, group_col, id_col, alpha = 0.05, 
     track_conv.index.names = [None]
     all_pv, all_oth = [], []
     [all_oth.append(col) if 'z-test p-value' not in col else all_pv.append(col) for col in all_cols]
+    all_oth.remove('Размер выборок')
+    display(track_conv.head(2))
     track_conv = track_conv[all_cols]
     track_conv[all_oth] = track_conv[all_oth].round(dec).values.astype('str')
 
