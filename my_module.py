@@ -3903,7 +3903,6 @@ def all_events_conversion(df, event_names_col, group_col, id_col, alpha = 0.05, 
     all_pv, all_oth = [], []
     [all_oth.append(col) if 'z-test p-value' not in col else all_pv.append(col) for col in all_cols]
     all_oth.remove('Размер выборок')
-    display(track_conv.head(2))
     track_conv = track_conv[all_cols]
     track_conv[all_oth] = track_conv[all_oth].round(dec).values.astype('str')
 
