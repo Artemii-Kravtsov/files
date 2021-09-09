@@ -3485,7 +3485,7 @@ def time_series(df, date_col, period = 'hours', title = '', ax = None, fontsize 
 #%%
 def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha = 0.05, 
                               save_name = None, figsize = (15, 5), vary_sizes = False,
-                              vary_iters_cnt = 500):
+                              vary_iters_cnt = 500, perform = ['z-test', 'fisher_exact']):
     import numpy as np
     from statsmodels.stats.proportion import proportions_ztest
     from statsmodels.distributions.empirical_distribution import ECDF
@@ -3498,37 +3498,52 @@ def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha 
     samples_stacked_h1 = np.column_stack((sample_a, sample_b_h1))
     samples_stacked_h0 = np.column_stack((sample_a, sample_b_h0))
     
-    pvalues_ztest_h1 = [proportions_ztest([x[0], x[1]], [trials1, trials2])[1] for x in samples_stacked_h1]
-    pvalues_ztest_h0 = [proportions_ztest([x[0], x[1]], [trials1, trials2])[1] for x in samples_stacked_h0]
+    perform_dict, labels = {}, {}
+    if 'z-test' in perform:
+        perform_dict['z-test'] = lambda x: proportions_ztest([x[0], x[1]], [trials1, trials2])[1]
+        labels.update({'z-test': 'Биномиальный z-test'})
+
+    if 'fisher_exact' in perform:
+        perform_dict['fisher_exact'] = lambda x: st.fisher_exact(np.array([[x[0], x[1]], 
+                                                                           [trials1 - x[0], trials2 - x[1]]]))[1]
+        labels.update({'fisher_exact': 'Точный тест Фишера'})
     
-    ecdf_h1 = ECDF(pvalues_ztest_h1)
-    ecdf_h0 = ECDF(pvalues_ztest_h0)
     
-    sensit_h1 = '{:.2f}'.format(ecdf_h1(alpha))
-    if abs(ecdf_h0(alpha) - alpha) > 0.005:
-        sensit_h0 = '{:.3f}'.format(ecdf_h0(alpha)) 
-    else:
-        sensit_h0 = '{:.2f}'.format(ecdf_h0(alpha))
-    
+    fig, ax1, ax2 = two_subplots(figsize, 
+                                     f"Кривая CDF для значений p-value (выборка из {iters_cnt} тестов)", 
+                                     [f'при $H1$ и α = {alpha}', f'при $H0$ и α = {alpha}'])
     dots = np.linspace(0, 1, iters_cnt)
     xy_ticks_h1 = [alpha] + list(np.arange(0.2, 1.1, 0.2))
     xy_ticks_h0 = [0.01] + list(np.arange(0.05, 0.21, 0.05))
-    
-    fig, ax1, ax2 = two_subplots(figsize, 
-                                 f"Кривая CDF для значений p-value (выборка из {iters_cnt} биномиальных ztest'ов)", 
-                                 [f'при $H1$ и α = {alpha}, доля принятых $H1$ = {sensit_h1}', 
-                                  f'при $H0$ и α = {alpha}, доля принятых $H1$ = {sensit_h0}'])
-    for ax, ecdf, xy_ticks in zip([ax1, ax2], [ecdf_h1, ecdf_h0], [xy_ticks_h1, xy_ticks_h0]):
-        ax.plot(dots, ecdf(dots), linewidth = 2, color = 'k')
+    for ax, xy_ticks in zip([ax1, ax2], [xy_ticks_h1, xy_ticks_h0]):
         ax.set_xlabel('p-value', fontsize = 12)
         ax.set_ylabel('доля выборки ниже значения по X', fontsize = 13)
         ax.set(xlim = (-0.005, 1), ylim = (0, 1.01), xticks = [alpha] + xy_ticks, yticks = xy_ticks)
         if max(xy_ticks) == 0.2:
             # мультипликатор на 1.04 - чтобы не казалось, что график дошёл до единиц и закончился 
             ax.set_xlim((0, 0.2 * 1.04))
-            ax.set_ylim((0, ecdf_h0(0.2) * 1.04))
         ax.grid(b = True, axis = 'both')
-        
+    
+    h0_02_limits = []
+    for test in perform:
+        pvalues_test_h1 = [perform_dict[test](x) for x in samples_stacked_h1]
+        pvalues_test_h0 = [perform_dict[test](x) for x in samples_stacked_h0]
+        ecdf_h1 = ECDF(pvalues_test_h1)
+        ecdf_h0 = ECDF(pvalues_test_h0)
+        h0_02_limits.append(ecdf_h0(0.2) * 1.04)
+    
+        sensit_h1 = '{:.2f}'.format(ecdf_h1(alpha))
+        if abs(ecdf_h0(alpha) - alpha) > 0.005:
+            sensit_h0 = '{:.3f}'.format(ecdf_h0(alpha)) 
+        else:
+            sensit_h0 = '{:.2f}'.format(ecdf_h0(alpha))
+
+        for ax, ecdf, hypos_accepted in zip([ax1, ax2], [ecdf_h1, ecdf_h0], [sensit_h1, sensit_h0]):
+            ax.plot(dots, ecdf(dots), linewidth = 2, label = labels[test] + f'\nПринятых $H1$ = {hypos_accepted}')
+            
+    ax1.legend() 
+    ax2.legend()
+    ax2.set_ylim((0, max(h0_02_limits)))
     if save_name:
         plt.savefig(save_name, bbox_inches = 'tight', pad_inches = 0)    
     display(fig)
@@ -3559,16 +3574,21 @@ def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha 
         sizes_bg = np.linspace(biggest_by_now, max_sample_size, 18, dtype = 'int')
         spread = min_sample_size - smallest_by_now
         
-        perform_dict, sensitivity_values = {}, {}
-        sensitivity_values['z-test'] = {}
-        for size_sm, size_bg in zip(sizes_sm, sizes_bg):
-            sensitivity_values['z-test'][size_sm] = 0
-            A = np.random.binomial(size_sm, conv_sm, vary_iters_cnt)
-            B = np.random.binomial(size_bg, conv_bg, vary_iters_cnt)
-            stattest = lambda x: proportions_ztest([x[0], x[1]], [size_sm, size_bg])[1]
-            pvalues_test = np.array(list(map(stattest, zip(A, B))))
-            caught_h1 = len(pvalues_test[ pvalues_test < alpha ])
-            sensitivity_values['z-test'][size_sm] = caught_h1 / vary_iters_cnt      
+        sensitivity_values = {}
+        
+        for test in perform:
+            sensitivity_values[test] = {}
+
+        for trials1, trials2 in zip(sizes_sm, sizes_bg):
+            #sensitivity_values['z-test'][size_sm] = 0
+            A = np.random.binomial(trials1, conv_sm, vary_iters_cnt)
+            B = np.random.binomial(trials2, conv_bg, vary_iters_cnt)
+            for test in perform:
+                stattest = perform_dict[test]
+                pvalues_test = np.array(list(map(stattest, zip(A, B))))
+                caught_h1 = len(pvalues_test[ pvalues_test < alpha ])
+                sensitivity_values[test][trials1] = caught_h1 / vary_iters_cnt
+            
         
         title = f'Изменение чувствительности при увеличении размера выборок, α = {alpha}'
         fig, ax = plt.subplots(figsize = figsize)
@@ -3580,12 +3600,13 @@ def binomial_ztest_simulation(trials1, trials2, c1, c2, iters_cnt = 1500, alpha 
         ax.set_xlim(smallest_by_now - spread * 0.1, min_sample_size + spread * 0.1)
         ax.grid(b = True, axis = 'both')
 
-        x, y = [], []
-        for size, successes in sensitivity_values['z-test'].items():
-            x.append(size)
-            y.append(successes)
-        ax.plot(x, y, linewidth = 2, color = 'black', label = 'Биномиальный z-test', marker = 'o', ms = 7, 
-                mfc = 'black', mec = 'white', mew = 2)
+        for test in perform:
+            x, y = [], []
+            for size, successes in sensitivity_values[test].items():
+                x.append(size)
+                y.append(successes)
+            ax.plot(x, y, linewidth = 2, label = labels[test], marker = 'o', ms = 7, 
+                    mec = 'white', mew = 2)
         
         ax.legend(fontsize = 'x-large')
         print()
@@ -3940,12 +3961,380 @@ def cum_conversion_table(df, markers_col, marker_trials, marker_successes,
     daily['conversion_cum'] = daily.successes_cum.div(daily.trials_cum)
     return daily.sort_values(by = ['group', 'date'])
 #%%
+from dfply import make_symbolic, dfpipe
+
+@dfpipe
+def pipe_display(df, rows = None):
+    display(df.head(rows))
+
+@make_symbolic    
+def to_datetime(series, 
+                errors: str = "raise",
+                dayfirst: bool = False,
+                yearfirst: bool = False,
+                utc: bool = None,
+                format: str = None,
+                exact: bool = True,
+                unit: str = None,
+                infer_datetime_format: bool = False,
+                origin="unix"):
+    from pandas import to_datetime as pdt
+    return pdt(series, 
+               errors = errors,
+               dayfirst = dayfirst,
+               yearfirst = yearfirst,
+               utc = utc,
+               format = format,
+               exact = exact,
+               unit = unit,
+               infer_datetime_format = infer_datetime_format,
+               origin = origin)
 #%%
+def whole_exponent(x, arange = None):
+    from math import log
+    from numpy import arange as ar
+    from IPython.display import display, Math
+    if not arange:
+        if x > 1:
+            arange = x + 1
+        else:
+            arange = 100
+    result = []
+    
+    if x > 1:
+        for i in ar(2, arange):
+            lgg = log(x, i)
+            if round(lgg, 6) == int(lgg):
+                result.append('{}^{} = {}'.format(i, '{' + str(int(lgg)) + '}', x))
+        if len(result) == 0:
+            return f'Нет целого основания, которое при возведении в целую положительную степень даст {x}'
+        else:
+            [display(Math(r)) for r in result]       
+                
+    elif x < 1:
+        for i in ar(2, arange):
+            lgg = log(i, x)
+            if round(lgg, 6) == int(lgg):
+                result.append('{}^{} = {}'.format(x, '{' + str(int(lgg)) + '}', i))
+        if len(result) == 0:
+            return ('Нет такой целой отрицательной степени, в которую можно возвести '
+                    f'число {x} и получить натуральное число')
+        else:
+            [display(Math(r)) for r in result]
+    
+    else:
+        return 'Любое основание в нулевой степени равно единице'
 #%%
+def square_eq(a, b, c):
+    from math import sqrt
+    D = (b ** 2) - (4 * a * c)
+    div = 2 * a
+    if D < 0:
+        print('Корней нет')
+    elif D == 0:
+        X = (-1 * b) / div
+        if X % 1 == 0:
+            X = int(X)
+        print('Один корень:', X)
+    else:
+        D = sqrt(D)
+        X1 = ((-1 * b) - D) / div
+        X2 = ((-1 * b) + D) / div
+        if X1 % 1 == 0:
+            X1 = int(X1)
+        if X2 % 1 == 0:
+            X2 = int(X2)
+        print('Дискриминант:', [int(D ** 2) if D % 1 == 0 else D ** 2][0])
+        print(f'Корни: {X1}, {X2}')
 #%%
+def print_as_table(*args, space_between_columns = 10, header = None, return_as_string = False):
+    """
+    Позиционные аргументы - неограниченное количество списков равной длины. 
+    Строчки формируются с помощью zip. Ширина первого столбца - длина максимального
+    значения под индексом ноль. Ширина остальных столбцов будет не меньше, чем
+    space_between_columns (по умолчанию - 10 символов).
+    Через header можно передать названия столбцов (в списке).
+    Функция делает print, возвращает None.
+    
+    Пример вызова: print_as_table(['test1', 'Тест на равенство долей'], 
+                                  ['ok', 'failed'], 
+                                  [89, 0.5747567522224], 
+                                  header = ['№ теста', 'Cтатус', 'Значение'])
+    """
+    
+    cols_num = len(args)
+    first_col_len = max([len(str(y)) for y in args[0]])
+    if header:
+        first_col_len = max(first_col_len, len(header[0]))
+        
+    rows_format = '{:>' + str(first_col_len) + '} |'
+    for i, vals in enumerate(args[1:], 1):
+        col_width = max(space_between_columns, max([len(str(y)) for y in vals]) + 3)
+        if header:
+            col_width = max(len(header[i]) + 3, col_width)
+        rows_format += "{:>" + str(col_width) + "}"
+        
+    
+        
+    if return_as_string:
+        return_str = ''
+        if header:
+            last_col_len = max(len(header[-1]), len(max([str(y) for y in args[-1]])))
+            header_string = rows_format.format(*header)
+            return_str += header_string + '\n' + '-' * len(header_string)
+        for set_of_args in zip(*args):
+            return_str += rows_format.format(*set_of_args) + '\n'
+        return return_str[:-1]
+    
+    else:
+        if header:
+            last_col_len = max(len(header[-1]), len(max([str(y) for y in args[-1]])))
+            header_string = rows_format.format(*header)
+            print(header_string)
+            print('-' * len(header_string))
+        for set_of_args in zip(*args):
+            print(rows_format.format(*set_of_args))
 #%%
+def dird(obj):
+    from pandas import DataFrame
+    
+    def inspect_attr_value(obj, attr_name):
+        instance_attrs = obj.__dict__
+        class_attrs = obj.__class__.__dict__
+        if attr_name in instance_attrs.keys():
+            return (str(type(instance_attrs[attr_name])), 'присвоен')
+        elif attr_name in class_attrs.keys():
+            return (str(type(class_attrs[attr_name])), 'наследован')
+        else:
+            return ('-', '-')
+    
+    object_names = []
+    for x in dir(obj):
+        if x[0] != '_':
+            object_names.append([x, *inspect_attr_value(obj, x)])
+    return DataFrame(columns = ['name', 'type', 'reference'], data = object_names)
 #%%
+def dates_to_russian(income_string, separated = True):
+    """
+    Переводит текстовые представления дней недели и месяцев с английского на русский.
+    По умолчанию исходит из того, что все текстовые представления (со служебными символами 
+    или без них) отделены от остальных символов пробелами. Если это не так, то следует
+    указать separated=False, но быть готовым к тому, что слово 'Wedding' станет 'Срding'.
+    """
+    
+    from re import search
+    change_map = {'Monday': 'Понедельник',
+     'Tuesday': 'Вторник',
+     'Wednesday': 'Среда',
+     'Thursday': 'Четверг',
+     'Friday': 'Пятница',
+     'Saturday': 'Суббота',
+     'Sunday': 'Воскресенье',
+     'Mon': 'Пн',
+     'Tue': 'Вт',
+     'Wed': 'Ср',
+     'Thu': 'Чт',
+     'Fri': 'Пт',
+     'Sat': 'Сб',
+     'Sun': 'Вс',
+     'January': 'Январь',
+     'February': 'Февраль',
+     'March': 'Март',
+     'April': 'Апрель',
+     'May': 'Май',
+     'June': 'Июнь',
+     'July': 'Июль',
+     'August': 'Август',
+     'September': 'Сентябрь',
+     'October': 'Октябрь',
+     'November': 'Ноябрь',
+     'December': 'Декабрь',
+     'Jan': 'Янв',
+     'Feb': 'Фев',
+     'Mar': 'Март',
+     'Apr': 'Апр',
+     'Jun': 'Июнь',
+     'Jul': 'Июль',
+     'Aug': 'Авг',
+     'Sep': 'Сен',
+     'Oct': 'Окт',
+     'Nov': 'Ноя',
+     'Dec': 'Дек'}
+
+    string_copy = income_string
+    
+    if not separated:
+        string_copy = income_string
+        for x, y in change_map.items():
+            string_copy = string_copy.replace(x, y)
+        return string_copy            
+    else:
+        d_keys = change_map.keys()
+        str_orig = income_string.split(' ')
+        str_clea = [sub('\W', '', x) for x in str_orig]
+        for i, x in enumerate(str_clea):
+            if x in d_keys:
+                str_orig[i] = str_orig[i].replace(x, change_map[x])
+        return ' '.join(str_orig)
 #%%
+class SlackBlocksComposer:
+    """
+    Подходит для формирования blocks= (для основного сообщения) или attachment={blocks: ...}.
+    Код не умеет создавать интерактивные элементы и загружать файлы. Если нужна справка, то можно 
+    посмотреть документацию по адресу https://api.slack.com/reference/block-kit/blocks
+    
+    Что тут происходит: элементы blocks добавляются с помощью вызова методов. Все добавленные 
+    элементы сохраняются как атрибуты созданного экземпляра, а в качестве имён используются 
+    числа в порядке возрастания (т.е. их порядковые номера). Метод .compose() пробегает по 
+    всем именам в порядке возрастания и складывает элементы в список. Этот список 
+    и является тем, что нужно передать в параметр blocks оператора SlackWebhookOperator.
+    
+    Пример вызова:
+    (SlackBlocksComposer().add_header('Произошла ошибка :angry:')
+                          .add_divider()
+                          .add_fields(['*Task_id*', '*DAG*', '*Время выполнения*'], 
+                                      ['problematic_task', 'dag', '10 февраля, 10:00'])
+                          .add_mrkdwn('<https://example.com|По этой ссылке можно найти логи>')
+                          .compose())
+    
+    """
+    
+    current_element = None
+    blocks_by_ids = None
+    
+    def __init__(self):
+        self.current_element = 0
+        self.blocks_by_ids = {}
+    
+    def insert_body_to_block(self, body, s):
+        """
+        Вспомогательный метод. Вызывать самостоятельно не нужно
+        """
+        if s:
+            block_dict = getattr(self, f'block_{s}')
+            if block_dict['type'] == 'section':
+                # fields и text не пишутся в accessory, а добавляются к словарю самой секции
+                if (isinstance(body, dict) 
+                    and ('fields' in body.keys() or ('text' in body.keys() and len(body) == 1))):
+                    block_dict.update(body)
+                else: 
+                    # у одной секции может быть только один 'accessory'. 
+                    # если по ошибке накидать несколько таких, то будет сохранён последний
+                    block_dict['accessory'] = body
+            elif block_dict['type'] in ('actions', 'context'):
+                if ('text' in body.keys() and len(body) == 1):
+                    body = body['text']
+                action_elements_list = block_dict.get('elements', [])
+                action_elements_list.append(body)
+                block_dict['elements'] = action_elements_list
+            return
+        setattr(self, str(self.current_element), {'type': 'section', **body})
+        setattr(self, 'current_element', self.current_element + 1)
+        
+    def add_divider(self):
+        """
+        Добавляет горизонтальную черту
+        """
+        setattr(self, str(self.current_element), {'type': 'divider'})
+        setattr(self, 'current_element', self.current_element + 1)
+        return self
+    
+    def add_header(self, header:str):
+        """
+        Добавляет заголовок
+        """
+        setattr(self, str(self.current_element), 
+                {'type': 'header', 'text': {'type': 'plain_text', 'text': str(header)}})
+        setattr(self, 'current_element', self.current_element + 1)
+        return self
+    
+    def add_block(self, block, s):
+        """
+        Метод создаёт в том месте, в котором вызван, пустой контейнер переданного в аргументе 
+        block типа (один из 'section', 'actions', 'context') с идентификатором 's'. После этого 
+        блок можно заполнять элементами, передавая соответствующим методам параметр 's'.
+        """
+        self.blocks_by_ids.update({self.current_element: s})
+        setattr(self, 'current_element', self.current_element + 1)
+        setattr(self, f'block_{s}', {'type': block})
+        return self
+    
+    def add_text(self, text, s = None, emoji = True):
+        """
+        Добавляет неформатированный текст в отдельную секцию или в переданный 
+        блок (блок должен быть типа 'context' или 'section')
+        """
+        body = {'text': {'type': 'plain_text', 'text': text, 'emoji': emoji}}
+        self.insert_body_to_block(body, s)
+        return self
+        
+    def add_mrkdwn(self, text, s = None, verbatim = False):
+        """
+        Добавляет текст, считая, что он написан с использованием markdown
+        в отдельную секцию или в переданный блок (блок должен быть типа 'context' или 
+        'section', и стоит держать в уме, что у Slack'а собственная реализация markdown)
+        """
+        body = {'text': {'type': 'mrkdwn', 'text': text, 'verbatim': verbatim}}
+        self.insert_body_to_block(body, s)
+        return self
+    
+    def add_fields(self, *lists_of_rows, s = None, f_type = 'mrkdwn'):
+        """
+        Принимает неограниченное число списков и отображает каждый из них колонкой.
+        Все значения в списках приводятся к str.
+        В ширину экрана Slack умещает ровно 2 колонки, так что если списков больше,
+        чем два, то они будут отображены друг под другом. Чтобы получилась колонка, 
+        элементы связываются друг с другом с помощью '\n'.join(). Результат вставляется 
+        в блок "s" (если передан, то должен быть секцией) или в новую секцию.
+        """
+        body = {'fields': []}
+        for l_of_rows in lists_of_rows:
+            body['fields'].append({'type': f_type, 'text': '\n'.join([str(row) for row in l_of_rows])})
+        self.insert_body_to_block(body, s)
+        return self
+    
+    def add_image(self, image_url, alt_text = ' ', s = None, title = None):
+        """
+        Добавляет картинку. В title можно передать подпись, которая будет размещена сверху, а 
+        в alt_text - подпись, которая будет видна при наведению на картинку. 
+        """
+        body = {'type': 'image', 'image_url': image_url, 'alt_text': alt_text}
+        if title and not s:
+            # заголовок можно добавить только к такой картинке, которая не будет вставлена в блок
+            body.update({'title': {'type': 'plain_text', 'text': title}})
+        if s:
+            self.insert_body_to_block(body, s)
+            return self
+        setattr(self, str(self.current_element), body)
+        setattr(self, 'current_element', self.current_element + 1)
+        return self
+    
+    def add_remote_file(self, external_id):
+        """
+        Чтобы добавить сторонний файл и получить на него external_id,
+        нужно пользоваться SlackAPIOperator.
+        Документация по адресу https://api.slack.com/messaging/files/remote#sharing
+        """
+        setattr(self, str(self.current_element), {'type': 'file', 'external_id': external_id, 
+                                                  'source': 'remote'})
+        setattr(self, 'current_element', self.current_element + 1)
+        return self
+    
+    
+    def compose(self):
+        """
+        Метод compose достаёт значения всех атрибутов в порядке возрастания их имён и
+        кладёт их один за другим в список. Результирующий список и является тем, что нужно
+        передать в blocks оператора SlackWebhookOperator.
+        """
+        blocks, sections_to_elements = [], {}
+        # связываю блоки (содержание блоков, а не их "s") с их порядковыми номерами
+        for i, sec_i in self.blocks_by_ids.items():
+            sections_to_elements[i] = getattr(self, f'block_{sec_i}')
+        # наполняю blocks
+        for i in range(0, self.current_element):
+            blocks.append(getattr(self, str(i), sections_to_elements.get(i)))
+        return blocks
 #%%
 #%%
 #%%
