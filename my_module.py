@@ -2894,8 +2894,8 @@ def fgd_in_discrete_vars(df, grouper, groups, discrete_vars, discrete_colnames,
             hist_data.append(vals)
             group_names.append(name)
             fig.add_trace(go.Histogram(x = vals, histnorm = 'probability', marker = {'color': color03}, 
-                          text = [f"Группа '{gr}'<extra></extra>"] * xticks_cnt, 
-                          hovertemplate = "%{y:.1%}: %{text}",
+                          hovertext = [f"Группа '{gr}'<extra></extra>"] * xticks_cnt, 
+                          hovertemplate = "%{y:.1%}: %{hovertext}",
                           legendgroup = name, showlegend = False, xbins = {'start': -0.5, 'size': 1}, 
                           name = name), **axis_pos)
         
